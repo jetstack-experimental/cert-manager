@@ -148,7 +148,7 @@ prometheus:
     interval: 60s
     scrapeTimeout: 30s
     labels: {}
-  prometheusrule:
+  prometheusRule:
     enabled: false
     labels: {}
     rules:
