@@ -117,6 +117,7 @@ The following table lists the configurable parameters of the cert-manager chart 
 | `prometheus.servicemonitor.interval` | Prometheus scrape interval | `60s` |
 | `prometheus.servicemonitor.labels` | Add custom labels to ServiceMonitor | |
 | `prometheus.servicemonitor.scrapeTimeout` | Prometheus scrape timeout | `30s` |
+| `prometheus.serviceAnnotations` | Annotations to add to the cert-manager service | `{}` |
 | `podAnnotations` | Annotations to add to the cert-manager pod | `{}` |
 | `deploymentAnnotations` | Annotations to add to the cert-manager deployment | `{}` |
 | `podDnsPolicy` | Optional cert-manager pod [DNS policy](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pods-dns-policy) |  |
@@ -133,6 +134,7 @@ The following table lists the configurable parameters of the cert-manager chart 
 | `webhook.deploymentAnnotations` | Annotations to add to the webhook deployment | `{}` |
 | `webhook.mutatingWebhookConfigurationAnnotations` | Annotations to add to the mutating webhook configuration | `{}` |
 | `webhook.validatingWebhookConfigurationAnnotations` | Annotations to add to the validating webhook configuration | `{}` |
+| `webhook.serviceAnnotations` | Annotations to add to the webhook service | `{}` |
 | `webhook.extraArgs` | Optional flags for cert-manager webhook component | `[]` |
 | `webhook.serviceAccount.create` | If `true`, create a new service account for the webhook component | `true` |
 | `webhook.serviceAccount.name` | Service account for the webhook component to be used. If not set and `webhook.serviceAccount.create` is `true`, a name is generated using the fullname template |  |

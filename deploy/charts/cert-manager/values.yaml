@@ -171,6 +171,8 @@ prometheus:
     interval: 60s
     scrapeTimeout: 30s
     labels: {}
+  # Optional additional annotations to add to the Prometheus service
+  # serviceAnnotations: {}
 
 # Use these variables to configure the HTTP_PROXY environment variables
 # http_proxy: "http://proxy:8080"
@@ -234,6 +236,9 @@ webhook:
 
   # Optional additional annotations to add to the webhook ValidatingWebhookConfiguration
   # validatingWebhookConfigurationAnnotations: {}
+
+  # Optional additional annotations to add to the webhook service
+  # serviceAnnotations: {}
 
   # Optional additional arguments for webhook
   extraArgs: []
