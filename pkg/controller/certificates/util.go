@@ -25,7 +25,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
@@ -262,16 +261,17 @@ func GenerateLocallySignedTemporaryCertificate(crt *cmapi.Certificate, pkData []
 	return b, nil
 }
 
-// RenewBeforeExpiryDuration will return the amount of time before the given
-// NotAfter time that the certificate should be renewed.
-func RenewBeforeExpiryDuration(notBefore, notAfter time.Time, specRenewBefore *metav1.Duration, defaultRenewBeforeExpiryDuration time.Duration) time.Duration {
-	renewBefore := defaultRenewBeforeExpiryDuration
-	if specRenewBefore != nil {
-		renewBefore = specRenewBefore.Duration
-	}
+// CalculateRenewalTime is used to calculate when to renew a certificate. It
+// takes the user preferred renewBefore margin, from the
+// Certificate.Spec.RenewBefore field, and returns a possibly adjusted value
+// which is compatible with the duration of the actual signed certificate.
+func CalculateRenewalTime(notBefore, notAfter time.Time, renewBefore time.Duration) time.Time {
 	actualDuration := notAfter.Sub(notBefore)
 	if renewBefore >= actualDuration {
 		renewBefore = actualDuration / 3
 	}
-	return renewBefore
+	if renewBefore < cmapi.MinimumRenewBefore {
+		renewBefore = cmapi.MinimumRenewBefore
+	}
+	return notAfter.Add(-renewBefore)
 }
