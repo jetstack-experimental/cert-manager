@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package shimhelper
 
 import (
 	"context"
@@ -1149,12 +1149,12 @@ func TestSync(t *testing.T) {
 			b.Init()
 			defer b.Stop()
 			c := &controller{
-				kClient:             b.Client,
-				cmClient:            b.CMClient,
-				recorder:            b.Recorder,
-				issuerLister:        b.SharedInformerFactory.Certmanager().V1().Issuers().Lister(),
-				clusterIssuerLister: b.SharedInformerFactory.Certmanager().V1().ClusterIssuers().Lister(),
-				certificateLister:   b.SharedInformerFactory.Certmanager().V1().Certificates().Lister(),
+				kClient:           b.Client,
+				cmClient:          b.CMClient,
+				recorder:          b.Recorder,
+				issuerList:        b.SharedInformerFactory.Certmanager().V1().Issuers().Lister(),
+				clusterIssuerList: b.SharedInformerFactory.Certmanager().V1().ClusterIssuers().Lister(),
+				certificateList:   b.SharedInformerFactory.Certmanager().V1().Certificates().Lister(),
 				defaults: defaults{
 					issuerName:                 test.DefaultIssuerName,
 					issuerKind:                 test.DefaultIssuerKind,
