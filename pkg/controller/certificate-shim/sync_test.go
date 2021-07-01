@@ -19,7 +19,6 @@ package shimhelper
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	networkingv1beta1 "k8s.io/api/networking/v1beta1"
@@ -28,9 +27,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	coretesting "k8s.io/client-go/testing"
 
+	"github.com/go-logr/logr"
 	cmacme "github.com/jetstack/cert-manager/pkg/apis/acme/v1"
 	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
+	"github.com/jetstack/cert-manager/pkg/controller"
 	testpkg "github.com/jetstack/cert-manager/pkg/controller/test"
 	"github.com/jetstack/cert-manager/test/unit/gen"
 )
@@ -68,7 +69,7 @@ func TestShouldSync(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		shouldSync := shouldSync(buildIngress("", "", test.Annotations), []string{"kubernetes.io/tls-acme"})
+		shouldSync := hasShimAnnotation(buildIngress("", "", test.Annotations), []string{"kubernetes.io/tls-acme"})
 		if shouldSync != test.ShouldSync {
 			t.Errorf("Expected shouldSync=%v for annotations %#v", test.ShouldSync, test.Annotations)
 		}
@@ -998,7 +999,7 @@ func TestSync(t *testing.T) {
 			Issuer:       acmeIssuer,
 			IssuerLister: []runtime.Object{acmeIssuer},
 			ExpectedEvents: []string{
-				`Warning BadConfig Duplicate TLS entry for secretName "example-com-tls"`,
+				`Warning BadConfig duplicate TLS entry for secretName "example-com-tls"`,
 			},
 			Ingress: &networkingv1beta1.Ingress{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1148,26 +1149,16 @@ func TestSync(t *testing.T) {
 			}
 			b.Init()
 			defer b.Stop()
-			c := &controller{
-				kClient:           b.Client,
-				cmClient:          b.CMClient,
-				recorder:          b.Recorder,
-				issuerList:        b.SharedInformerFactory.Certmanager().V1().Issuers().Lister(),
-				clusterIssuerList: b.SharedInformerFactory.Certmanager().V1().ClusterIssuers().Lister(),
-				certificateList:   b.SharedInformerFactory.Certmanager().V1().Certificates().Lister(),
-				defaults: defaults{
-					issuerName:                 test.DefaultIssuerName,
-					issuerKind:                 test.DefaultIssuerKind,
-					issuerGroup:                test.DefaultIssuerGroup,
-					autoCertificateAnnotations: []string{testAcmeTLSAnnotation},
-				},
-				helper: &fakeHelper{issuer: test.Issuer},
-			}
+			sync := SyncFnFor(b.Recorder, logr.DiscardLogger{}, b.CMClient, b.SharedInformerFactory.Certmanager().V1().Certificates().Lister(), controller.IngressShimOptions{
+				DefaultIssuerName:                 test.DefaultIssuerName,
+				DefaultIssuerKind:                 test.DefaultIssuerKind,
+				DefaultIssuerGroup:                test.DefaultIssuerGroup,
+				DefaultAutoCertificateAnnotations: []string{testAcmeTLSAnnotation},
+			})
 			b.Start()
 
-			err := c.sync(context.Background(), test.Ingress)
+			err := sync(context.Background(), test.Ingress)
 
-			// If test.Err == true, err should not be nil and vice versa
 			if test.Err == (err == nil) {
 				t.Errorf("Expected error: %v, but got: %v", test.Err, err)
 			}
@@ -1186,17 +1177,6 @@ func TestSync(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.Name, testFn(test))
 	}
-}
-
-type fakeHelper struct {
-	issuer cmapi.GenericIssuer
-}
-
-func (f *fakeHelper) GetGenericIssuer(ref cmmeta.ObjectReference, ns string) (cmapi.GenericIssuer, error) {
-	if f.issuer == nil {
-		return nil, fmt.Errorf("no issuer specified on fake helper")
-	}
-	return f.issuer, nil
 }
 
 func TestIssuerForIngress(t *testing.T) {
@@ -1259,14 +1239,12 @@ func TestIssuerForIngress(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		c := &controller{
-			defaults: defaults{
-				issuerKind:  test.DefaultKind,
-				issuerName:  test.DefaultName,
-				issuerGroup: test.DefaultGroup,
-			},
+		defaults := controller.IngressShimOptions{
+			DefaultIssuerName:  test.DefaultName,
+			DefaultIssuerKind:  test.DefaultKind,
+			DefaultIssuerGroup: test.DefaultGroup,
 		}
-		name, kind, group, err := c.issuerForIngress(test.Ingress)
+		name, kind, group, err := issuerForIngressLike(defaults, test.Ingress)
 		if err != nil {
 			if test.ExpectedError == nil || err.Error() != test.ExpectedError.Error() {
 				t.Errorf("unexpected error, exp=%v got=%s", test.ExpectedError, err)

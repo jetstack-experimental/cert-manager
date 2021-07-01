@@ -47,6 +47,7 @@ func (c *controller) Register(ctx *controllerpkg.Context) (workqueue.RateLimitin
 	cmShared := ctx.SharedInformerFactory
 
 	c.ingressLister = kShared.Networking().V1beta1().Ingresses().Lister()
+
 	log := logf.FromContext(ctx.RootContext, ControllerName)
 	c.sync = shimhelper.SyncFnFor(ctx.Recorder, log, ctx.CMClient, cmShared.Certmanager().V1().Certificates().Lister(), ctx.IngressShimOptions)
 
