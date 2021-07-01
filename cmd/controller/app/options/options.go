@@ -29,7 +29,6 @@ import (
 	challengescontroller "github.com/jetstack/cert-manager/pkg/controller/acmechallenges"
 	orderscontroller "github.com/jetstack/cert-manager/pkg/controller/acmeorders"
 	ingressshimcontroller "github.com/jetstack/cert-manager/pkg/controller/certificate-shim/gateways"
-	ingressshimcontroller "github.com/jetstack/cert-manager/pkg/controller/certificate-shim/ingresses"
 	cracmecontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/acme"
 	crapprovercontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/approver"
 	crcacontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/ca"

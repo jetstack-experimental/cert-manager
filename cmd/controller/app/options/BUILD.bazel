@@ -10,7 +10,6 @@ go_library(
         "//pkg/controller/acmechallenges:go_default_library",
         "//pkg/controller/acmeorders:go_default_library",
         "//pkg/controller/certificate-shim/gateways:go_default_library",
-        "//pkg/controller/certificate-shim/ingresses:go_default_library",
         "//pkg/controller/certificaterequests/acme:go_default_library",
         "//pkg/controller/certificaterequests/approver:go_default_library",
         "//pkg/controller/certificaterequests/ca:go_default_library",

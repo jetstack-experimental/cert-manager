@@ -130,7 +130,6 @@ type ACMEOptions struct {
 // These are set from the cmd cli flags, allowing the controllers to support legacy annotations
 // such as `kubernetes.io/tls-acme`.
 type IngressShimOptions struct {
-	// Default issuer/certificates details consumed by ingress-shim
 	DefaultIssuerName                 string
 	DefaultIssuerKind                 string
 	DefaultIssuerGroup                string
