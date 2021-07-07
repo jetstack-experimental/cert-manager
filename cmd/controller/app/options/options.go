@@ -28,7 +28,8 @@ import (
 	cm "github.com/jetstack/cert-manager/pkg/apis/certmanager"
 	challengescontroller "github.com/jetstack/cert-manager/pkg/controller/acmechallenges"
 	orderscontroller "github.com/jetstack/cert-manager/pkg/controller/acmeorders"
-	ingressshimcontroller "github.com/jetstack/cert-manager/pkg/controller/certificate-shim/gateways"
+	shimgatewaycontroller "github.com/jetstack/cert-manager/pkg/controller/certificate-shim/gateways"
+	shimingresscontroller "github.com/jetstack/cert-manager/pkg/controller/certificate-shim/ingresses"
 	cracmecontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/acme"
 	crapprovercontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/approver"
 	crcacontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/ca"
@@ -150,7 +151,8 @@ var (
 		issuerscontroller.ControllerName,
 		clusterissuerscontroller.ControllerName,
 		certificatesmetricscontroller.ControllerName,
-		ingressshimcontroller.ControllerName,
+		shimingresscontroller.ControllerName,
+		shimgatewaycontroller.ControllerName,
 		orderscontroller.ControllerName,
 		challengescontroller.ControllerName,
 		cracmecontroller.CRControllerName,
@@ -172,7 +174,7 @@ var (
 		issuerscontroller.ControllerName,
 		clusterissuerscontroller.ControllerName,
 		certificatesmetricscontroller.ControllerName,
-		ingressshimcontroller.ControllerName,
+		shimingresscontroller.ControllerName,
 		orderscontroller.ControllerName,
 		challengescontroller.ControllerName,
 		cracmecontroller.CRControllerName,
