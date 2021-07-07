@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package ingresses
 
 import (
 	"context"
@@ -38,8 +38,8 @@ const (
 )
 
 type controller struct {
-	sync          func(context.Context, metav1.Object) error
 	ingressLister networkinglisters.IngressLister
+	sync          shimhelper.SyncFn
 }
 
 func (c *controller) Register(ctx *controllerpkg.Context) (workqueue.RateLimitingInterface, []cache.InformerSynced, error) {
@@ -48,7 +48,7 @@ func (c *controller) Register(ctx *controllerpkg.Context) (workqueue.RateLimitin
 
 	c.ingressLister = kShared.Networking().V1beta1().Ingresses().Lister()
 	log := logf.FromContext(ctx.RootContext, ControllerName)
-	c.sync = shimhelper.SyncFn(ctx.Recorder, log, ctx.CMClient, cmShared.Certmanager().V1().Certificates().Lister(), ctx.IngressShimOptions)
+	c.sync = shimhelper.SyncFnFor(ctx.Recorder, log, ctx.CMClient, cmShared.Certmanager().V1().Certificates().Lister(), ctx.IngressShimOptions)
 
 	queue := workqueue.NewNamedRateLimitingQueue(controllerpkg.DefaultItemBasedRateLimiter(), ControllerName)
 

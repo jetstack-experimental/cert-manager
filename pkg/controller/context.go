@@ -126,6 +126,9 @@ type ACMEOptions struct {
 	DNS01CheckRetryPeriod time.Duration
 }
 
+// IngressShimOptions contain default Issuer GVK config for the certificate-shim controllers.
+// These are set from the cmd cli flags, allowing the controllers to support legacy annotations
+// such as `kubernetes.io/tls-acme`.
 type IngressShimOptions struct {
 	// Default issuer/certificates details consumed by ingress-shim
 	DefaultIssuerName                 string
