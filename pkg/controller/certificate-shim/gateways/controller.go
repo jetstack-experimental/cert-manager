@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package gateways
 
 import (
 	"context"
@@ -24,7 +24,6 @@ import (
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	gatewayapi "sigs.k8s.io/gateway-api/apis/v1alpha1"
@@ -48,24 +47,16 @@ const (
 	resyncPeriod = 10 * time.Hour
 )
 
-type defaults struct {
-	autoCertificateAnnotations          []string
-	issuerName, issuerKind, issuerGroup string
-}
-
 type controller struct {
-	gatewayList gapilisters.GatewayLister
-	sync        func(context.Context, metav1.Object) error
+	gatewayLister gapilisters.GatewayLister
+	sync          shimhelper.SyncFn
 }
 
 func (c *controller) Register(ctx *controllerpkg.Context) (workqueue.RateLimitingInterface, []cache.InformerSynced, error) {
-	// The user may have enabled the gateway-shim controller but forgot to
-	// install the Gateway API CRDs. This will cause cert-manager to go into
+	// The user may have enabled the gateway-shim controller but forgotten to
+	// install the Gateway API CRDs. Failing here will cause cert-manager to go into
 	// CrashLoopBackoff which is nice and obvious.
-	d, err := discovery.NewDiscoveryClientForConfig(ctx.RESTConfig)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%s: couldn't construct discovery client: %w", ControllerName, err)
-	}
+	d := ctx.Client.Discovery()
 	resources, err := d.ServerResourcesForGroupVersion(gatewayapi.GroupVersion.String())
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: couldn't discover gateway API resources (are the Gateway API CRDS installed?): %w", ControllerName, err)
@@ -76,20 +67,20 @@ func (c *controller) Register(ctx *controllerpkg.Context) (workqueue.RateLimitin
 
 	// The Gateway API is an external CRD, which means its shared informers are
 	// not available in controllerpkg.Context.
-	gapiShared := gatewayinformers.NewSharedInformerFactory(gatewayclient.NewForConfigOrDie(ctx.RESTConfig), resyncPeriod)
+	gwapiShared := gatewayinformers.NewSharedInformerFactory(gatewayclient.NewForConfigOrDie(ctx.RESTConfig), resyncPeriod)
 	cmShared := ctx.SharedInformerFactory
 
-	c.gatewayList = gapiShared.Networking().V1alpha1().Gateways().Lister()
+	c.gatewayLister = gwapiShared.Networking().V1alpha1().Gateways().Lister()
 	log := logf.FromContext(ctx.RootContext, ControllerName)
-	c.sync = shimhelper.SyncFn(ctx.Recorder, log, ctx.CMClient, cmShared.Certmanager().V1().Certificates().Lister(), ctx.IngressShimOptions)
+	c.sync = shimhelper.SyncFnFor(ctx.Recorder, log, ctx.CMClient, cmShared.Certmanager().V1().Certificates().Lister(), ctx.IngressShimOptions)
 
 	queue := workqueue.NewNamedRateLimitingQueue(controllerpkg.DefaultItemBasedRateLimiter(), ControllerName)
 
-	gapiShared.Networking().V1alpha1().Gateways().Informer().AddEventHandler(&controllerpkg.QueuingEventHandler{Queue: queue})
+	gwapiShared.Networking().V1alpha1().Gateways().Informer().AddEventHandler(&controllerpkg.QueuingEventHandler{Queue: queue})
 	cmShared.Certmanager().V1().Certificates().Informer().AddEventHandler(&controllerpkg.BlockingEventHandler{WorkFunc: certificateDeleted(queue)})
 
 	mustSync := []cache.InformerSynced{
-		gapiShared.Networking().V1alpha1().Gateways().Informer().HasSynced,
+		gwapiShared.Networking().V1alpha1().Gateways().Informer().HasSynced,
 		cmShared.Certmanager().V1().Certificates().Informer().HasSynced,
 	}
 
@@ -103,7 +94,7 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 		return nil
 	}
 
-	crt, err := c.gatewayList.Gateways(namespace).Get(name)
+	crt, err := c.gatewayLister.Gateways(namespace).Get(name)
 
 	if err != nil {
 		if k8sErrors.IsNotFound(err) {
@@ -117,6 +108,20 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 	return c.sync(ctx, crt)
 }
 
+// Whenever a Certificate gets deleted, we want to reconcile its parent Gateway.
+// This parent Ingress is called "controller object". For example, the following
+// Certificate is controlled by the Gateway "example":
+//
+//     kind: Certificate
+//     metadata:
+//       namespace: cert-that-was-deleted
+//       ownerReferences:
+//       - controller: true                                       ← this
+//         apiVersion: networking.x-k8s.io/v1alpha1
+//         kind: Gateway
+//         name: example
+//         blockOwnerDeletion: true
+//         uid: 7d3897c2-ce27-4144-883a-e1b5f89bd65a
 func certificateDeleted(queue workqueue.RateLimitingInterface) func(obj interface{}) {
 	return func(obj interface{}) {
 		crt, ok := obj.(*cmapi.Certificate)
@@ -132,9 +137,14 @@ func certificateDeleted(queue workqueue.RateLimitingInterface) func(obj interfac
 			return
 		}
 
-		if ref.Kind != "Ingress" {
+		// We don't check the apiVersion e.g. "networking.x-k8s.io/v1alpha1"
+		// because there is no chance that another object called "Gateway" be
+		// the controller of a Certificate.
+		if ref.Kind != "Gateway" {
 			return
 		}
+
+		// Queue items are simple strings of the form "namespace-1/ingress-1".
 		queue.Add(crt.Namespace + "/" + ref.Name)
 	}
 }

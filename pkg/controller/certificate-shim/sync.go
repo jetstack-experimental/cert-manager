@@ -55,22 +55,28 @@ const (
 var ingressGVK = networkingv1beta1.SchemeGroupVersion.WithKind("Ingress")
 var gatewayGVK = gwapi.SchemeGroupVersion.WithKind("Gateway")
 
-// We call "Ingress-like" things like Ingress, Gateway and HTTPRoute. Due to
-// their similarity, the reconciliation function for them is common.
+// SyncFn is the reconciliation function passed to a certificate-shim's controller.
+type SyncFn func(context.Context, metav1.Object) error
+
+// SyncFnFor contains logic to reconcile any "Ingress-like" object.
 //
-// Reconciling an Ingress-like object consists in looking at its annotation and
-// creating a Certificate (we call it a "shim") that is meant to fill in the
-// secretNames in the TLS configuration of the Ingress-like object.
-func SyncFn(
-	rec record.EventRecorder, log logr.Logger, cmClient clientset.Interface, cmLister cmlisters.CertificateLister,
+// An "Ingress-like" object is a resource such as an Ingress, Gateway or HTTPRoute.
+// Due to their similarity, the reconciliation function for them is common.
+// Reconciling an Ingress-like object means looking at its annotations and
+// creating a Certificate with matching DNS names and secretNames from the
+// TLS configuration of the Ingress-like object.
+func SyncFnFor(
+	rec record.EventRecorder,
+	log logr.Logger,
+	cmClient clientset.Interface,
+	cmLister cmlisters.CertificateLister,
 	defaults controller.IngressShimOptions,
-) func(context.Context, metav1.Object) error {
+) SyncFn {
 	return func(ctx context.Context, ingLike metav1.Object) error {
-		log := logf.WithResource(logf.FromContext(ctx), ingLike)
+		log := logf.WithResource(log, ingLike)
 		ctx = logf.NewContext(ctx, log)
 
-		// That's because rec.Eventf requires a runtime.Object, not a
-		// metav1.Object.
+		// rec.Eventf requires a runtime.Object, not a metav1.Object.
 		ingLikeObj, ok := ingLike.(runtime.Object)
 		if !ok {
 			return fmt.Errorf("programmer mistake: %T was expected to be a runtime.Object", ingLike)
@@ -89,8 +95,6 @@ func SyncFn(
 				err)
 			return nil
 		}
-		// var o runtime.Object
-		// ingLike.
 
 		errs := validateIngress(ingLike)
 		if len(errs) > 0 {
@@ -144,7 +148,8 @@ func validateIngress(ingLike metav1.Object) []error {
 	switch o := ingLike.(type) {
 	case *networkingv1beta1.Ingress:
 		// Having multiple TLS entries on an Ingress is fine, but we can't
-		// process an Ingress that has two TLS entries with the same secretName.
+		// process an Ingress that has two TLS entries with the same secretName
+		// to avoid two Certificate controller loops fighting.
 		var errs []error
 		namedSecrets := make(map[string]int)
 		for _, tls := range o.Spec.TLS {
@@ -210,8 +215,11 @@ func validateIngressTLSBlock(tlsBlock networkingv1beta1.IngressTLS) []error {
 }
 
 func buildCertificates(
-	ctx context.Context, rec record.EventRecorder, cmLister cmlisters.CertificateLister,
-	ingLike metav1.Object, issuerName, issuerKind, issuerGroup string,
+	ctx context.Context,
+	rec record.EventRecorder,
+	cmLister cmlisters.CertificateLister,
+	ingLike metav1.Object,
+	issuerName, issuerKind, issuerGroup string,
 ) (new, update []*cmapi.Certificate, _ error) {
 
 	log := logf.FromContext(ctx)
@@ -441,8 +449,8 @@ func setIssuerSpecificConfig(crt *cmapi.Certificate, ing *networkingv1beta1.Ingr
 	}
 }
 
-// shouldSync returns true if this ingress should have a Certificate resource
-// created for it
+// shouldSync returns true if this ingress-like object should have a Certificate resource
+// created for it based on its annotations.
 func shouldSync(ingLike metav1.Object, autoCertificateAnnotations []string) bool {
 	annotations := ingLike.GetAnnotations()
 	if annotations == nil {
@@ -464,8 +472,8 @@ func shouldSync(ingLike metav1.Object, autoCertificateAnnotations []string) bool
 	return false
 }
 
-// issuerForIngress determines the issuer that should be specified on a
-// Certificate created for the given Ingress resource. If one is not set, the
+// issuerForIngressLike determines the Issuer that should be specified on a
+// Certificate created for the given ingress-like resource. If one is not set, the
 // default issuer given to the controller is used.
 func issuerForIngressLike(defaults controller.IngressShimOptions, ingLike metav1.Object) (name, kind, group string, err error) {
 	var errs []string
