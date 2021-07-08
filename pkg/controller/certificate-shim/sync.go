@@ -107,7 +107,7 @@ func SyncFnFor(
 			return nil
 		}
 
-		newCrts, updateCrts, err := buildCertificates(ctx, rec, log, cmLister, ingLike, issuerName, issuerKind, issuerGroup)
+		newCrts, updateCrts, err := buildCertificates(rec, log, cmLister, ingLike, issuerName, issuerKind, issuerGroup)
 		if err != nil {
 			return err
 		}
@@ -216,7 +216,6 @@ func validateIngressTLSBlock(tlsBlock networkingv1beta1.IngressTLS) []error {
 }
 
 func buildCertificates(
-	ctx context.Context,
 	rec record.EventRecorder,
 	log logr.Logger,
 	cmLister cmlisters.CertificateLister,
