@@ -41,7 +41,7 @@ import (
 	cmlisters "github.com/jetstack/cert-manager/pkg/client/listers/certmanager/v1"
 	"github.com/jetstack/cert-manager/pkg/controller"
 	logf "github.com/jetstack/cert-manager/pkg/logs"
-	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	gwapi "sigs.k8s.io/gateway-api/apis/v1alpha1"
 )
 
@@ -97,13 +97,9 @@ func SyncFnFor(
 			return nil
 		}
 
-		errs := validateIngress(ingLike)
-		if len(errs) > 0 {
-			errMsg := errs[0].Error()
-			if len(errs) > 1 {
-				errMsg = utilerrors.NewAggregate(errs).Error()
-			}
-			rec.Eventf(ingLikeObj, corev1.EventTypeWarning, reasonBadConfig, errMsg)
+		err = validateIngressLike(ingLike).ToAggregate()
+		if err != nil {
+			rec.Eventf(ingLikeObj, corev1.EventTypeWarning, reasonBadConfig, err.Error())
 			return nil
 		}
 
@@ -145,73 +141,177 @@ func SyncFnFor(
 	}
 }
 
-func validateIngress(ingLike metav1.Object) []error {
+func validateIngressLike(ingLike metav1.Object) field.ErrorList {
 	switch o := ingLike.(type) {
 	case *networkingv1beta1.Ingress:
-		// Having multiple TLS entries on an Ingress is fine, but we can't
-		// process an Ingress that has two TLS entries with the same secretName
-		// to avoid two Certificate controller loops fighting.
-		var errs []error
-		namedSecrets := make(map[string]int)
-		for _, tls := range o.Spec.TLS {
-			namedSecrets[tls.SecretName]++
-		}
-		for name, n := range namedSecrets {
-			if n > 1 {
-				errs = append(errs, fmt.Errorf("duplicate TLS entry for secretName %q", name))
-			}
-		}
-		return errs
+		return validateIngressTLS(field.NewPath("spec", "tls"), o.Spec.TLS)
 	case *gwapi.Gateway:
-		return validateGatewayListeners(o.Spec.Listeners)
+		return validateGatewayListeners(field.NewPath("spec", "listeners"), o.Spec.Listeners)
 	default:
-		return []error{fmt.Errorf("validateObject: can't handle %T, expected Ingress or Gateway", ingLike)}
+		panic(fmt.Errorf("programmer mistake: validateIngressLike can't handle %T, expected Ingress or Gateway", ingLike))
 	}
 }
 
-func validateGatewayListeners(listeners []gwapi.Listener) []error {
-	var errs []error
+func validateIngressTLS(path *field.Path, tlsBlocks []networkingv1beta1.IngressTLS) field.ErrorList {
+	var errs field.ErrorList
+	// We can't let two TLS blocks share the same secretName because we decided
+	// to create one Certificate for each TLS block. For example:
+	//
+	//   kind: Ingress
+	//   spec:
+	//     tls:
+	//       - hosts: [example.com]
+	//         secretName: example-tls
+	//       - hosts: [www.example.com]
+	//         secretName: example-tls
+	//
+	// With this Ingress, cert-manager would create two Certificates with the
+	// same name, which would fail.
+	//
+	// We keep track of the order of the secret names due to Go iterating on
+	// maps in a non-deterministic way. We also keep track of each secret name's
+	// path. These paths look like this:
+	//   "spec.tls[2].secretName"
+	//   "spec.tls[6].secretName"
+	// These paths allow us to give better error messages.
+	var secretNames []string
+	secretPaths := make(map[string][]*field.Path)
+	for i, tls := range tlsBlocks {
+		if _, already := secretPaths[tls.SecretName]; !already {
+			secretNames = append(secretNames, tls.SecretName)
+		}
+		secretPaths[tls.SecretName] = append(secretPaths[tls.SecretName], path.Index(i).Child("secretName"))
+	}
 
-	for _, l := range listeners {
-		if l.TLS == nil {
-			return []error{fmt.Errorf("listener for host %s does not specify a TLS block", *l.Hostname)}
-		}
-		if l.TLS.CertificateRef.Group != "core" {
-			errs = append(
-				errs,
-				fmt.Errorf(
-					"unsupported certificateRef.group, want %s got %s",
-					"core",
-					l.TLS.CertificateRef.Group,
-				),
-			)
-		}
-		if *l.TLS.Mode == gwapi.TLSModePassthrough {
-			errs = append(
-				errs,
-				fmt.Errorf(
-					"listener for %s has mode %s, the only valid mode is %s",
-					*l.Hostname,
-					gwapi.TLSModePassthrough,
-					gwapi.TLSModeTerminate,
-				),
-			)
+	for _, name := range secretNames {
+		paths := secretPaths[name]
+		if len(paths) > 1 {
+			// We could use field.Duplicate, but that would prevent us from
+			// giving details as to what this duplicate is about.
+			errs = append(errs, field.Invalid(paths[0], name,
+				fmt.Sprintf("this secret name must only appear in a single TLS entry but is also used in %s", paths[1])))
 		}
 	}
+
 	return errs
 }
 
-func validateIngressTLSBlock(tlsBlock networkingv1beta1.IngressTLS) []error {
-	// Unlikely that _both_ SecretName and Hosts would be empty, but still
-	// returning []error for consistency.
-	var errs []error
+func validateIngressTLSBlock(path *field.Path, tlsBlock networkingv1beta1.IngressTLS) field.ErrorList {
+	var errs field.ErrorList
 
 	if len(tlsBlock.Hosts) == 0 {
-		errs = append(errs, fmt.Errorf("secret %q for ingress TLS has no hosts specified", tlsBlock.SecretName))
+		errs = append(errs, field.Required(path.Child("hosts"), ""))
 	}
 	if tlsBlock.SecretName == "" {
-		errs = append(errs, fmt.Errorf("TLS entry for hosts %v must specify a secretName", tlsBlock.Hosts))
+		errs = append(errs, field.Required(path.Child("secretName"), ""))
 	}
+
+	return errs
+}
+
+func validateGatewayListeners(path *field.Path, listeners []gwapi.Listener) field.ErrorList {
+	var errs field.ErrorList
+
+	// We can't let two TLS blocks share the same certificateRef.name because we
+	// decided to create one Certificate for each Gateway listener. For example:
+	//
+	//   kind: Gateway
+	//   spec:
+	//     listeners:
+	//       - hostname: example.com
+	//         tls:
+	//           certificateRef:
+	//             name: secret-1
+	//       - hostname: www.example.com
+	//         tls:
+	//           certificateRef:
+	//             name: secret-1
+	//
+	// With this Gateway, cert-manager would create two Certificates with the
+	// same name, which would fail.
+	//
+	// We keep track of the order of the secret names due to Go iterating on
+	// maps in a non-deterministic way. We also keep track of each secret name's
+	// path. These paths look like this:
+	//   "spec.listeners[2].tls.certificateRef.name"
+	//   "spec.listeners[6].tls.certificateRef.name"
+	// These paths allow us to give better error messages.
+	var secretNames []string
+	secretPaths := make(map[string][]*field.Path)
+	for i, l := range listeners {
+		if l.TLS == nil || l.TLS.CertificateRef == nil {
+			// This function is meant to catch the "blocking" validation errors:
+			// if any of these validations fail, the certificate-shim controller
+			// won't be creating a Certificate.
+			//
+			// But we still want to create Certificates for the valid listeners
+			// even though one of the listerners block is invalid. That's why
+			// the listener validation happens in validateGatewayListenerBlock
+			// instead.
+			continue
+		}
+
+		if _, already := secretPaths[l.TLS.CertificateRef.Name]; !already {
+			secretNames = append(secretNames, l.TLS.CertificateRef.Name)
+		}
+		secretPaths[l.TLS.CertificateRef.Name] = append(secretPaths[l.TLS.CertificateRef.Name],
+			path.Index(i).Child("tls").Child("certificateRef").Child("name"))
+	}
+	for _, name := range secretNames {
+		paths := secretPaths[name]
+		if len(paths) > 1 {
+			// We could use field.Duplicate, but that would prevent us from
+			// giving details as to what this duplicate is about.
+			errs = append(errs, field.Invalid(paths[0], name,
+				fmt.Sprintf("this secret name must only appear in a single listener entry but is also used in %s", paths[1])))
+		}
+	}
+
+	return errs
+}
+
+func validateGatewayListenerBlock(path *field.Path, l gwapi.Listener) field.ErrorList {
+	var errs field.ErrorList
+
+	if l.Hostname == nil || *l.Hostname == "" {
+		errs = append(errs, field.Required(path.Child("hostname"), "the hostname cannot be empty"))
+	}
+
+	if l.TLS == nil {
+		errs = append(errs, field.Required(path.Child("tls"), "the TLS block cannot be empty"))
+		return errs
+	}
+
+	if l.TLS.CertificateRef == nil {
+		errs = append(errs, field.Required(path.Child("tls").Child("certificateRef"),
+			"listener is missing a certificateRef"))
+	} else {
+		if l.TLS.CertificateRef.Group != "core" {
+			errs = append(errs, field.NotSupported(path.Child("tls").Child("certificateRef").Child("group"),
+				l.TLS.CertificateRef.Group, []string{"core"}))
+		}
+
+		if l.TLS.CertificateRef.Kind != "Secret" {
+			errs = append(errs, field.NotSupported(path.Child("tls").Child("certificateRef").Child("kind"),
+				l.TLS.CertificateRef.Kind, []string{"Secret"}))
+		}
+
+		if l.TLS.CertificateRef.Name == "" {
+			errs = append(errs, field.Required(path.Child("tls").Child("certificateRef").Child("name"),
+				"the Secret name cannot be empty"))
+		}
+	}
+
+	if l.TLS.Mode == nil {
+		errs = append(errs, field.Required(path.Child("tls").Child("mode"),
+			"the mode field is required"))
+	} else {
+		if *l.TLS.Mode != gwapi.TLSModeTerminate {
+			errs = append(errs, field.NotSupported(path.Child("tls").Child("mode"),
+				*l.TLS.Mode, []string{string(gwapi.TLSModeTerminate)}))
+		}
+	}
+
 	return errs
 }
 
@@ -228,53 +328,57 @@ func buildCertificates(
 
 	type certificateShimInfo struct {
 		// tlsHosts key = secret ref, value = dns host names
-		tlsHosts map[corev1.ObjectReference][]string
-		gvk      schema.GroupVersionKind
+
+		gvk schema.GroupVersionKind
 	}
 
-	certs := certificateShimInfo{
-		tlsHosts: map[corev1.ObjectReference][]string{},
-	}
-
+	tlsHosts := make(map[corev1.ObjectReference][]string)
 	switch ingLike := ingLike.(type) {
 	case *networkingv1beta1.Ingress:
-		certs.gvk = ingressGVK
 		for i, tls := range ingLike.Spec.TLS {
-			errs := validateIngressTLSBlock(tls)
-			if len(errs) > 0 {
-				errMsg := utilerrors.NewAggregate(errs).Error()
-				rec.Eventf(ingLike, corev1.EventTypeWarning, reasonBadConfig, fmt.Sprintf("TLS entry %d is invalid: %s", i, errMsg))
+			path := field.NewPath("spec", "tls").Index(i)
+			err := validateIngressTLSBlock(path, tls).ToAggregate()
+			if err != nil {
+				rec.Eventf(ingLike, corev1.EventTypeWarning, reasonBadConfig, "Skipped a TLS block: "+err.Error())
 				continue
 			}
-			certs.tlsHosts[corev1.ObjectReference{
+			tlsHosts[corev1.ObjectReference{
 				Namespace: ingLike.Namespace,
 				Name:      tls.SecretName,
 			}] = tls.Hosts
 		}
 	case *gwapi.Gateway:
-		certs.gvk = gatewayGVK
-		errs := validateGatewayListeners(ingLike.Spec.Listeners)
-		if len(errs) > 0 {
-			rec.Eventf(ingLike, corev1.EventTypeWarning, reasonBadConfig, fmt.Sprintf("%s", utilerrors.NewAggregate(errs)))
-			return nil, nil, utilerrors.NewAggregate(errs)
-		}
-		for _, l := range ingLike.Spec.Listeners {
+		for i, l := range ingLike.Spec.Listeners {
+			err := validateGatewayListenerBlock(field.NewPath("spec", "listeners").Index(i), l).ToAggregate()
+			if err != nil {
+				rec.Eventf(ingLike, corev1.EventTypeWarning, reasonBadConfig, "Skipped a listener block: "+err.Error())
+				continue
+			}
+
 			secretRef := corev1.ObjectReference{
 				Namespace: ingLike.Namespace,
 				Name:      l.TLS.CertificateRef.Name,
 			}
 			// Gateway API hostname explicitly disallows IP addresses, so this
 			// should be OK.
-			certs.tlsHosts[secretRef] = append(certs.tlsHosts[secretRef], fmt.Sprintf("%s", *l.Hostname))
+			tlsHosts[secretRef] = append(tlsHosts[secretRef], fmt.Sprintf("%s", *l.Hostname))
 		}
 	default:
 		return nil, nil, fmt.Errorf("buildCertificates: expected ingress or gateway, got %T", ingLike)
 	}
 
-	for secretRef, hosts := range certs.tlsHosts {
+	for secretRef, hosts := range tlsHosts {
 		existingCrt, err := cmLister.Certificates(secretRef.Namespace).Get(secretRef.Name)
 		if !apierrors.IsNotFound(err) && err != nil {
 			return nil, nil, err
+		}
+
+		var controllerGVK schema.GroupVersionKind
+		switch ingLike.(type) {
+		case *networkingv1beta1.Ingress:
+			controllerGVK = ingressGVK
+		case *gwapi.Gateway:
+			controllerGVK = gatewayGVK
 		}
 
 		crt := &cmapi.Certificate{
@@ -282,7 +386,7 @@ func buildCertificates(
 				Name:            secretRef.Name,
 				Namespace:       secretRef.Namespace,
 				Labels:          ingLike.GetLabels(),
-				OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(ingLike, certs.gvk)},
+				OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(ingLike, controllerGVK)},
 			},
 			Spec: cmapi.CertificateSpec{
 				DNSNames:   hosts,
@@ -296,10 +400,15 @@ func buildCertificates(
 			},
 		}
 
-		if certs.gvk == ingressGVK {
-			setIssuerSpecificConfig(crt, ingLike.(*networkingv1beta1.Ingress))
+		switch o := ingLike.(type) {
+		case *networkingv1beta1.Ingress:
+			ingLike = o.DeepCopy()
+		case *gwapi.Gateway:
+			ingLike = o.DeepCopy()
 		}
-		if err := translateIngressAnnotations(crt, ingLike.GetAnnotations()); err != nil {
+		setIssuerSpecificConfig(crt, ingLike)
+
+		if err := translateAnnotations(crt, ingLike.GetAnnotations()); err != nil {
 			return nil, nil, err
 		}
 
@@ -328,11 +437,12 @@ func buildCertificates(
 
 			updateCrt.Spec = crt.Spec
 			updateCrt.Labels = crt.Labels
-			if certs.gvk == ingressGVK {
-				setIssuerSpecificConfig(updateCrt, ingLike.(*networkingv1beta1.Ingress))
-			}
+
+			setIssuerSpecificConfig(crt, ingLike)
+
 			updateCrts = append(updateCrts, updateCrt)
 		} else {
+
 			newCrts = append(newCrts, crt)
 		}
 	}
@@ -420,8 +530,8 @@ func certNeedsUpdate(a, b *cmapi.Certificate) bool {
 	return false
 }
 
-func setIssuerSpecificConfig(crt *cmapi.Certificate, ing *networkingv1beta1.Ingress) {
-	ingAnnotations := ing.Annotations
+func setIssuerSpecificConfig(crt *cmapi.Certificate, ingLike metav1.Object) {
+	ingAnnotations := ingLike.GetAnnotations()
 	if ingAnnotations == nil {
 		ingAnnotations = map[string]string{}
 	}
@@ -433,7 +543,7 @@ func setIssuerSpecificConfig(crt *cmapi.Certificate, ing *networkingv1beta1.Ingr
 		if crt.Annotations == nil {
 			crt.Annotations = make(map[string]string)
 		}
-		crt.Annotations[cmacme.ACMECertificateHTTP01IngressNameOverride] = ing.Name
+		crt.Annotations[cmacme.ACMECertificateHTTP01IngressNameOverride] = ingLike.GetName()
 		// set IssueTemporaryCertificateAnnotation to true in order to behave
 		// better when ingress-gce is being used.
 		crt.Annotations[cmapi.IssueTemporaryCertificateAnnotation] = "true"
@@ -446,6 +556,8 @@ func setIssuerSpecificConfig(crt *cmapi.Certificate, ing *networkingv1beta1.Ingr
 		}
 		crt.Annotations[cmacme.ACMECertificateHTTP01IngressClassOverride] = ingressClassVal
 	}
+
+	ingLike.SetAnnotations(ingAnnotations)
 }
 
 // hasShimAnnotation returns true if this ingress-like object contains one of
