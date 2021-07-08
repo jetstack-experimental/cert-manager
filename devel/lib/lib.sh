@@ -39,7 +39,7 @@ export INGRESS_IP="${SERVICE_IP_PREFIX}.15"
 # versions of the tools required for development
 setup_tools() {
   check_bazel
-  bazel build //hack/bin:helm //hack/bin:kind //hack/bin:kubectl //devel/bin:ginkgo
+  bazel build //hack/bin:helm //hack/bin:kind //hack/bin:kubectl //devel/bin:ginkgo //hack/bin:istioctl //hack/bin:kustomize
   if [[ "$IS_OPENSHIFT" == "true" ]]; then
     bazel build //hack/bin:oc3
   fi
