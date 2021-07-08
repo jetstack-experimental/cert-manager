@@ -110,7 +110,7 @@ func TestTranslateIngressAnnotations(t *testing.T) {
 			}
 			crt := tc.crt.DeepCopy()
 
-			err := translateIngressAnnotations(crt, tc.annotations)
+			err := translateAnnotations(crt, tc.annotations)
 
 			if tc.expectedError != nil {
 				assertErrorIs(t, err, tc.expectedError)

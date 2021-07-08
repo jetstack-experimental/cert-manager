@@ -14,18 +14,12 @@ limitations under the License.
 package shimhelper
 
 import (
+	"github.com/stretchr/testify/assert"
+
 	"context"
 	"errors"
 	"fmt"
 	"testing"
-
-	gwapi "sigs.k8s.io/gateway-api/apis/v1alpha1"
-
-	networkingv1beta1 "k8s.io/api/networking/v1beta1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	coretesting "k8s.io/client-go/testing"
 
 	"github.com/go-logr/logr"
 	cmacme "github.com/jetstack/cert-manager/pkg/apis/acme/v1"
@@ -34,6 +28,13 @@ import (
 	"github.com/jetstack/cert-manager/pkg/controller"
 	testpkg "github.com/jetstack/cert-manager/pkg/controller/test"
 	"github.com/jetstack/cert-manager/test/unit/gen"
+	networkingv1beta1 "k8s.io/api/networking/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	coretesting "k8s.io/client-go/testing"
+	gwapi "sigs.k8s.io/gateway-api/apis/v1alpha1"
 )
 
 const testAcmeTLSAnnotation = "kubernetes.io/tls-acme"
@@ -104,7 +105,7 @@ func TestSync(t *testing.T) {
 		ExpectedDelete      []*cmapi.Certificate
 		ExpectedEvents      []string
 	}
-	tests := []testT{
+	testIngressShim := []testT{
 		{
 			Name:   "return a single Certificate for an ingress with a single valid TLS entry and common-name annotation",
 			Issuer: acmeClusterIssuer,
@@ -141,79 +142,6 @@ func TestSync(t *testing.T) {
 							"my-test-label": "should be copied",
 						},
 						OwnerReferences: buildIngressOwnerReferences("ingress-name", gen.DefaultTestNamespace),
-					},
-					Spec: cmapi.CertificateSpec{
-						DNSNames:   []string{"example.com", "www.example.com"},
-						CommonName: "my-cn",
-						SecretName: "example-com-tls",
-						IssuerRef: cmmeta.ObjectReference{
-							Name: "issuer-name",
-							Kind: "ClusterIssuer",
-						},
-						Usages: cmapi.DefaultKeyUsages(),
-					},
-				},
-			},
-		},
-		{
-			Name:   "return a single Certificate for a gateway with a single valid TLS entry and common-name annotation",
-			Issuer: acmeClusterIssuer,
-			IngressLike: &gwapi.Gateway{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "gateway-name",
-					Namespace: gen.DefaultTestNamespace,
-					Labels: map[string]string{
-						"my-test-label": "should be copied",
-					},
-					Annotations: map[string]string{
-						cmapi.IngressClusterIssuerNameAnnotationKey: "issuer-name",
-						cmapi.CommonNameAnnotationKey:               "my-cn",
-					},
-					UID: types.UID("gateway-name"),
-				},
-				Spec: gwapi.GatewaySpec{
-					GatewayClassName: "test-gateway",
-					Listeners: []gwapi.Listener{
-						{
-							Hostname: buildGatewayHostname("example.com"),
-							Port:     443,
-							Protocol: "HTTPS",
-							TLS: &gwapi.GatewayTLSConfig{
-								Mode: buildGatewayTLSTerminate(),
-								CertificateRef: &gwapi.LocalObjectReference{
-									Group: "core",
-									Kind:  "secret",
-									Name:  "example-com-tls",
-								},
-							},
-						},
-						{
-							Hostname: buildGatewayHostname("www.example.com"),
-							Port:     443,
-							Protocol: "HTTPS",
-							TLS: &gwapi.GatewayTLSConfig{
-								Mode: buildGatewayTLSTerminate(),
-								CertificateRef: &gwapi.LocalObjectReference{
-									Group: "core",
-									Kind:  "secret",
-									Name:  "example-com-tls",
-								},
-							},
-						},
-					},
-				},
-			},
-			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
-			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
-			ExpectedCreate: []*cmapi.Certificate{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com-tls",
-						Namespace: gen.DefaultTestNamespace,
-						Labels: map[string]string{
-							"my-test-label": "should be copied",
-						},
-						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
 					},
 					Spec: cmapi.CertificateSpec{
 						DNSNames:   []string{"example.com", "www.example.com"},
@@ -603,7 +531,7 @@ func TestSync(t *testing.T) {
 			Issuer:       acmeIssuer,
 			IssuerLister: []runtime.Object{acmeIssuer},
 			ExpectedEvents: []string{
-				`Warning BadConfig TLS entry 0 is invalid: secret "example-com-tls-invalid" for ingress TLS has no hosts specified`,
+				`Warning BadConfig Skipped a TLS block: spec.tls[0].hosts: Required value`,
 				`Normal CreateCertificate Successfully created Certificate "example-com-tls"`,
 			},
 			IngressLike: &networkingv1beta1.Ingress{
@@ -652,7 +580,7 @@ func TestSync(t *testing.T) {
 			Issuer:       acmeIssuer,
 			IssuerLister: []runtime.Object{acmeIssuer},
 			ExpectedEvents: []string{
-				`Warning BadConfig TLS entry 0 is invalid: TLS entry for hosts [example.com] must specify a secretName`,
+				`Warning BadConfig Skipped a TLS block: spec.tls[0].secretName: Required value`,
 				`Normal CreateCertificate Successfully created Certificate "example-com-tls"`,
 			},
 			IngressLike: &networkingv1beta1.Ingress{
@@ -1076,7 +1004,7 @@ func TestSync(t *testing.T) {
 			Issuer:       acmeIssuer,
 			IssuerLister: []runtime.Object{acmeIssuer},
 			ExpectedEvents: []string{
-				`Warning BadConfig duplicate TLS entry for secretName "example-com-tls"`,
+				`Warning BadConfig spec.tls[0].secretName: Invalid value: "example-com-tls": this secret name must only appear in a single TLS entry but is also used in spec.tls[1].secretName`,
 			},
 			IngressLike: &networkingv1beta1.Ingress{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1185,6 +1113,1199 @@ func TestSync(t *testing.T) {
 			},
 		},
 	}
+
+	testGatewayShim := []testT{
+		{
+			Name:   "return a single Certificate for a Gateway with a single valid TLS entry and common-name annotation",
+			Issuer: acmeClusterIssuer,
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Labels: map[string]string{
+						"my-test-label": "should be copied",
+					},
+					Annotations: map[string]string{
+						cmapi.IngressClusterIssuerNameAnnotationKey: "issuer-name",
+						cmapi.CommonNameAnnotationKey:               "my-cn",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{
+						{
+							Hostname: ptrHostname("example.com"),
+							Port:     443,
+							Protocol: "HTTPS",
+							TLS: &gwapi.GatewayTLSConfig{
+								Mode: ptrMode(gwapi.TLSModeTerminate),
+								CertificateRef: &gwapi.LocalObjectReference{
+									Group: "core",
+									Kind:  "Secret",
+									Name:  "example-com-tls",
+								},
+							},
+						},
+					},
+				},
+			},
+			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
+			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "example-com-tls",
+						Namespace: gen.DefaultTestNamespace,
+						Labels: map[string]string{
+							"my-test-label": "should be copied",
+						},
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						CommonName: "my-cn",
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "ClusterIssuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:   "return a single HTTP01 Certificate for a Gateway with a single valid TLS entry and HTTP01 annotations using edit-in-place",
+			Issuer: acmeClusterIssuer,
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Labels: map[string]string{
+						"my-test-label": "should be copied",
+					},
+					Annotations: map[string]string{
+						cmapi.IngressClusterIssuerNameAnnotationKey: "issuer-name",
+						cmacme.IngressEditInPlaceAnnotationKey:      "true",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
+			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "example-com-tls",
+						Namespace: gen.DefaultTestNamespace,
+						Labels: map[string]string{
+							"my-test-label": "should be copied",
+						},
+						Annotations: map[string]string{
+							cmacme.ACMECertificateHTTP01IngressNameOverride: "gateway-name",
+							cmapi.IssueTemporaryCertificateAnnotation:       "true",
+						},
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "ClusterIssuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:   "create a Certificate with the HTTP01 name override if the given Gateway uses http01 annotations",
+			Issuer: gen.Issuer(acmeIssuer.Name),
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Labels: map[string]string{
+						"my-test-label": "should be copied",
+					},
+					Annotations: map[string]string{
+						cmapi.IngressClusterIssuerNameAnnotationKey: "issuer-name",
+						cmacme.IngressEditInPlaceAnnotationKey:      "true",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
+			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "example-com-tls",
+						Namespace: gen.DefaultTestNamespace,
+						Labels: map[string]string{
+							"my-test-label": "should be copied",
+						},
+						Annotations: map[string]string{
+							cmacme.ACMECertificateHTTP01IngressNameOverride: "gateway-name",
+							cmapi.IssueTemporaryCertificateAnnotation:       "true",
+						},
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "ClusterIssuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:   "return a single HTTP01 Certificate for an Gateway with a single valid TLS entry and HTTP01 annotations with no gateway class set",
+			Issuer: acmeClusterIssuer,
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressClusterIssuerNameAnnotationKey: "issuer-name",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
+			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "ClusterIssuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:   "return a single HTTP01 Certificate for an Gateway with a single valid TLS entry and HTTP01 annotations with a custom gateway class",
+			Issuer: acmeClusterIssuer,
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressClusterIssuerNameAnnotationKey: "issuer-name",
+						cmapi.IngressClassAnnotationKey:             "nginx-ing",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
+			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "ClusterIssuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:   "return a single HTTP01 Certificate for an Gateway with a single valid TLS entry and HTTP01 annotations with a certificate Gateway class",
+			Issuer: acmeClusterIssuer,
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressClusterIssuerNameAnnotationKey:            "issuer-name",
+						cmapi.IngressACMEIssuerHTTP01IngressClassAnnotationKey: "cert-ing",
+						cmapi.IngressClassAnnotationKey:                        "nginx-ing",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
+			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+						Annotations: map[string]string{
+							cmacme.ACMECertificateHTTP01IngressClassOverride: "cert-ing",
+						},
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "ClusterIssuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:   "edit-in-place set to false should not trigger editing the Gateway in-place",
+			Issuer: acmeClusterIssuer,
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressClusterIssuerNameAnnotationKey: "issuer-name",
+						cmapi.IngressClassAnnotationKey:             "nginx-ing",
+						cmacme.IngressEditInPlaceAnnotationKey:      "false",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
+			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "ClusterIssuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:   "return a single DNS01 Certificate for a Gateway with a single valid TLS entry",
+			Issuer: acmeClusterIssuer,
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressClusterIssuerNameAnnotationKey: "issuer-name",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
+			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "ClusterIssuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:                "should return a basic certificate when no provider specific config is provided",
+			Issuer:              clusterIssuer,
+			DefaultIssuerName:   "issuer-name",
+			DefaultIssuerKind:   "ClusterIssuer",
+			DefaultIssuerGroup:  "cert-manager.io",
+			ClusterIssuerLister: []runtime.Object{clusterIssuer},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						testAcmeTLSAnnotation: "true",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ExpectedEvents: []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name:  "issuer-name",
+							Kind:  "ClusterIssuer",
+							Group: "cert-manager.io",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:         "should skip an invalid TLS entry (no TLS hosts specified)",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuer},
+			ExpectedEvents: []string{
+				`Warning BadConfig Skipped a listener block: spec.listeners[1].hostname: Required value: the hostname cannot be empty`,
+				`Normal CreateCertificate Successfully created Certificate "example-com-tls"`,
+			},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}, {
+						Hostname: nil, // 🔥
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls-invalid",
+							},
+						},
+					}},
+				},
+			},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						Usages:     cmapi.DefaultKeyUsages(),
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "Issuer",
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:         "should skip an invalid TLS entry (no TLS secret name specified)",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuer},
+			ExpectedEvents: []string{
+				`Warning BadConfig Skipped a listener block: spec.listeners[0].tls.certificateRef: Required value: listener is missing a certificateRef`,
+				`Normal CreateCertificate Successfully created Certificate "example-com-tls"`,
+			},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode:           ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: nil, // 🔥
+						},
+					}, {
+						Hostname: ptrHostname("www.example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"www.example.com"},
+						SecretName: "example-com-tls",
+						Usages:     cmapi.DefaultKeyUsages(),
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "Issuer",
+						},
+					},
+				},
+			},
+		},
+		{
+			Name: "should error if the specified issuer is not found",
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "invalid-issuer-name",
+					},
+					UID: types.UID("gateway-name"),
+				},
+			},
+		},
+		{
+			Name:         "should not return any certificates if a correct Certificate already exists",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuer},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "existing-crt",
+							},
+						},
+					}},
+				},
+			},
+			DefaultIssuerKind:  "Issuer",
+			DefaultIssuerGroup: "cert-manager.io",
+			CertificateLister: []runtime.Object{
+				&cmapi.Certificate{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "existing-crt",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "existing-crt",
+						IssuerRef: cmmeta.ObjectReference{
+							Name:  "issuer-name",
+							Kind:  "Issuer",
+							Group: "cert-manager.io",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:         "should update a certificate if an incorrect Certificate exists",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuer},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "existing-crt",
+							},
+						},
+					}},
+				},
+			},
+			CertificateLister: []runtime.Object{
+				buildCertificate("existing-crt",
+					gen.DefaultTestNamespace,
+					buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+				),
+			},
+			DefaultIssuerKind: "Issuer",
+			ExpectedEvents:    []string{`Normal UpdateCertificate Successfully updated Certificate "existing-crt"`},
+			ExpectedUpdate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "existing-crt",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "existing-crt",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "Issuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:         "should update an existing Certificate resource with new labels if they do not match those specified on the Gateway",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuerNewFormat},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Labels: map[string]string{
+						"my-test-label": "should be copied",
+					},
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "cert-secret-name",
+							},
+						},
+					}},
+				},
+			},
+			DefaultIssuerKind: "Issuer",
+			CertificateLister: []runtime.Object{
+				&cmapi.Certificate{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "cert-secret-name",
+						Namespace: gen.DefaultTestNamespace,
+						Labels: map[string]string{
+							"a-different-value": "should be removed",
+						},
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "cert-secret-name",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "Issuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+			ExpectedEvents: []string{`Normal UpdateCertificate Successfully updated Certificate "cert-secret-name"`},
+			ExpectedUpdate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "cert-secret-name",
+						Namespace: gen.DefaultTestNamespace,
+						Labels: map[string]string{
+							"my-test-label": "should be copied",
+						},
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "cert-secret-name",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "Issuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:         "should not update certificate if it does not belong to any Gateway",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuer},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+						cmapi.IngressClassAnnotationKey:      "toot-ing",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "existing-crt",
+							},
+						},
+					}},
+				},
+			},
+			CertificateLister: []runtime.Object{
+				&cmapi.Certificate{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "existing-crt",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: []metav1.OwnerReference{},
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "existing-crt",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "Issuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:         "should not update certificate if it does not belong to the Gateway",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuer},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+						cmapi.IngressClassAnnotationKey:      "toot-ing",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "existing-crt",
+							},
+						},
+					}},
+				},
+			},
+			CertificateLister: []runtime.Object{
+				&cmapi.Certificate{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "existing-crt",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildIngressOwnerReferences("not-gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "existing-crt",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "Issuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:         "should delete a Certificate if its secret name is not present in the Gateway",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuer},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+					},
+					UID: types.UID("gateway-name"),
+				},
+			},
+			CertificateLister: []runtime.Object{
+				&cmapi.Certificate{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "existing-crt",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "existing-crt",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "Issuer",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+			ExpectedEvents: []string{`Normal DeleteCertificate Successfully deleted unrequired Certificate "existing-crt"`},
+			ExpectedDelete: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "existing-crt",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "existing-crt",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "Issuer",
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:         "should update a Certificate if is contains a Common Name that is not defined on the Gateway annotations",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuer},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+						cmapi.IssuerKindAnnotationKey:        "Issuer",
+						cmapi.IssuerGroupAnnotationKey:       "cert-manager.io",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			CertificateLister: []runtime.Object{
+				&cmapi.Certificate{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						CommonName: "example-common-name",
+						IssuerRef: cmmeta.ObjectReference{
+							Name:  "issuer-name",
+							Kind:  "Issuer",
+							Group: "cert-manager.io",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+			ExpectedEvents: []string{`Normal UpdateCertificate Successfully updated Certificate "example-com-tls"`},
+			ExpectedUpdate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name:  "issuer-name",
+							Kind:  "Issuer",
+							Group: "cert-manager.io",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
+				},
+			},
+		},
+		{
+			Name:         "if a Gateway contains multiple tls entries that specify the same secretName, an error should be logged and no action taken",
+			Issuer:       acmeIssuer,
+			IssuerLister: []runtime.Object{acmeIssuer},
+			ExpectedEvents: []string{
+				`Warning BadConfig spec.listeners[0].tls.certificateRef.name: Invalid value: "example-com-tls": this secret name must only appear in a single listener entry but is also used in spec.listeners[1].tls.certificateRef.name`,
+			},
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+						cmapi.IssuerKindAnnotationKey:        "Issuer",
+						cmapi.IssuerGroupAnnotationKey:       "cert-manager.io",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}, {
+						Hostname: ptrHostname("notexample.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+		},
+		{
+			Name:   "Failure to translate the Gateway annotations",
+			Issuer: acmeIssuer,
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Annotations: map[string]string{
+						cmapi.IngressIssuerNameAnnotationKey: "issuer-name",
+						cmapi.IssuerKindAnnotationKey:        "Issuer",
+						cmapi.IssuerGroupAnnotationKey:       "cert-manager.io",
+						cmapi.RenewBeforeAnnotationKey:       "invalid renew before value",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			Err: true,
+		},
+		{
+			Name:   "return a single Certificate for a Gateway with a single valid TLS entry with common-name and keyusage annotation",
+			Issuer: acmeClusterIssuer,
+			IngressLike: &gwapi.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway-name",
+					Namespace: gen.DefaultTestNamespace,
+					Labels: map[string]string{
+						"my-test-label": "should be copied",
+					},
+					Annotations: map[string]string{
+						cmapi.IngressClusterIssuerNameAnnotationKey: "issuer-name",
+						cmapi.CommonNameAnnotationKey:               "my-cn",
+						"cert-manager.io/usages":                    "signing,digital signature,content commitment",
+					},
+					UID: types.UID("gateway-name"),
+				},
+				Spec: gwapi.GatewaySpec{
+					GatewayClassName: "test-gateway",
+					Listeners: []gwapi.Listener{{
+						Hostname: ptrHostname("example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}},
+				},
+			},
+			ClusterIssuerLister: []runtime.Object{acmeClusterIssuer},
+			ExpectedEvents:      []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "example-com-tls",
+						Namespace: gen.DefaultTestNamespace,
+						Labels: map[string]string{
+							"my-test-label": "should be copied",
+						},
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com"},
+						CommonName: "my-cn",
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name: "issuer-name",
+							Kind: "ClusterIssuer",
+						},
+						Usages: []cmapi.KeyUsage{
+							cmapi.UsageSigning,
+							cmapi.UsageDigitalSignature,
+							cmapi.UsageContentCommitment,
+						},
+					},
+				},
+			},
+		},
+	}
+
 	testFn := func(test testT) func(t *testing.T) {
 		return func(t *testing.T) {
 			var allCMObjects []runtime.Object
@@ -1252,9 +2373,18 @@ func TestSync(t *testing.T) {
 			}
 		}
 	}
-	for _, test := range tests {
-		t.Run(test.Name, testFn(test))
-	}
+	t.Run("ingress-shim", func(t *testing.T) {
+		for _, test := range testIngressShim {
+			t.Run(test.Name, testFn(test))
+		}
+	})
+
+	t.Run("gateway-shim", func(t *testing.T) {
+		for _, test := range testGatewayShim {
+			t.Run(test.Name, testFn(test))
+		}
+	})
+
 }
 
 type fakeHelper struct {
@@ -1402,12 +2532,204 @@ func buildGatewayOwnerReferences(name, namespace string) []metav1.OwnerReference
 	}
 }
 
-func buildGatewayHostname(hostname string) *gwapi.Hostname {
+func ptrHostname(hostname string) *gwapi.Hostname {
 	h := gwapi.Hostname(hostname)
 	return &h
 }
 
-func buildGatewayTLSTerminate() *gwapi.TLSModeType {
-	terminate := gwapi.TLSModeTerminate
-	return &terminate
+func ptrMode(mode gwapi.TLSModeType) *gwapi.TLSModeType {
+	return &mode
+}
+
+func Test_validateGatewayListenerBlock(t *testing.T) {
+	tests := []struct {
+		name     string
+		listener gwapi.Listener
+		wantErr  string
+	}{
+		{
+			name: "empty TLS block",
+			listener: gwapi.Listener{
+				Hostname: ptrHostname("example.com"),
+				Port:     gwapi.PortNumber(443),
+				Protocol: gwapi.HTTPSProtocolType,
+			},
+			wantErr: "spec.listeners[0].tls: Required value: the TLS block cannot be empty",
+		},
+		{
+			name: "empty hostname",
+			listener: gwapi.Listener{
+				Hostname: ptrHostname(""),
+				Port:     gwapi.PortNumber(443),
+				Protocol: gwapi.HTTPSProtocolType,
+				TLS: &gwapi.GatewayTLSConfig{
+					Mode: ptrMode(gwapi.TLSModeTerminate),
+					CertificateRef: &gwapi.LocalObjectReference{
+						Group: "core",
+						Kind:  "Secret",
+						Name:  "example-com",
+					},
+				},
+			},
+			wantErr: "spec.listeners[0].hostname: Required value: the hostname cannot be empty",
+		},
+		{
+			name: "empty group",
+			listener: gwapi.Listener{
+				Hostname: ptrHostname("example.com"),
+				Port:     gwapi.PortNumber(443),
+				Protocol: gwapi.HTTPSProtocolType,
+				TLS: &gwapi.GatewayTLSConfig{
+					Mode: ptrMode(gwapi.TLSModeTerminate),
+					CertificateRef: &gwapi.LocalObjectReference{
+						Group: "",
+						Kind:  "Secret",
+						Name:  "example-com",
+					},
+				},
+			},
+			wantErr: "spec.listeners[0].tls.certificateRef.group: Unsupported value: \"\": supported values: \"core\"",
+		},
+		{
+			name: "unsupported group",
+			listener: gwapi.Listener{
+				Hostname: ptrHostname("example.com"),
+				Port:     gwapi.PortNumber(443),
+				Protocol: gwapi.HTTPSProtocolType,
+				TLS: &gwapi.GatewayTLSConfig{
+					Mode: ptrMode(gwapi.TLSModeTerminate),
+					CertificateRef: &gwapi.LocalObjectReference{
+						Group: "invalid",
+						Kind:  "Secret",
+						Name:  "example-com",
+					},
+				},
+			},
+			wantErr: "spec.listeners[0].tls.certificateRef.group: Unsupported value: \"invalid\": supported values: \"core\"",
+		},
+		{
+			name: "unsupported kind",
+			listener: gwapi.Listener{
+				Hostname: ptrHostname("example.com"),
+				Port:     gwapi.PortNumber(443),
+				Protocol: gwapi.HTTPSProtocolType,
+				TLS: &gwapi.GatewayTLSConfig{
+					Mode: ptrMode(gwapi.TLSModeTerminate),
+					CertificateRef: &gwapi.LocalObjectReference{
+						Group: "core",
+						Kind:  "SomeOtherKind",
+						Name:  "example-com",
+					},
+				},
+			},
+			wantErr: "spec.listeners[0].tls.certificateRef.kind: Unsupported value: \"SomeOtherKind\": supported values: \"Secret\"",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gotErr := validateGatewayListenerBlock(field.NewPath("spec", "listeners").Index(0), test.listener).ToAggregate()
+			if test.wantErr == "" {
+				assert.NoError(t, gotErr)
+			} else {
+				assert.EqualError(t, gotErr, test.wantErr)
+			}
+		})
+	}
+}
+
+func Test_validateGatewayListeners(t *testing.T) {
+	tests := []struct {
+		name      string
+		listeners []gwapi.Listener
+		wantErr   string
+	}{
+		{
+			name: "happy path",
+			listeners: []gwapi.Listener{
+				{
+					Hostname: ptrHostname("example.com"),
+					Port:     gwapi.PortNumber(443),
+					Protocol: gwapi.HTTPSProtocolType,
+					TLS: &gwapi.GatewayTLSConfig{
+						Mode: ptrMode(gwapi.TLSModeTerminate),
+						CertificateRef: &gwapi.LocalObjectReference{
+							Group: "core",
+							Kind:  "Secret",
+							Name:  "example-com-tls",
+						},
+					},
+				},
+				{
+					Hostname: ptrHostname("example.com"),
+					Port:     gwapi.PortNumber(8443),
+					Protocol: gwapi.HTTPSProtocolType,
+					TLS: &gwapi.GatewayTLSConfig{
+						Mode: ptrMode(gwapi.TLSModeTerminate),
+						CertificateRef: &gwapi.LocalObjectReference{
+							Group: "core",
+							Kind:  "Secret",
+							Name:  "example-com-8443-tls",
+						},
+					},
+				},
+				{
+					Hostname: ptrHostname("foo.example.com"),
+					Port:     gwapi.PortNumber(443),
+					Protocol: gwapi.HTTPSProtocolType,
+					TLS: &gwapi.GatewayTLSConfig{
+						Mode: ptrMode(gwapi.TLSModeTerminate),
+						CertificateRef: &gwapi.LocalObjectReference{
+							Group: "core",
+							Kind:  "Secret",
+							Name:  "foo-example-com-tls",
+						},
+					},
+				}},
+		},
+		{
+			name:      "no error when no listener is given",
+			listeners: []gwapi.Listener{},
+		},
+		{
+			name: "duplicate secretName",
+			listeners: []gwapi.Listener{
+				{
+					Hostname: ptrHostname("example.com"),
+					Port:     gwapi.PortNumber(443),
+					Protocol: gwapi.HTTPSProtocolType,
+					TLS: &gwapi.GatewayTLSConfig{
+						Mode: ptrMode(gwapi.TLSModeTerminate),
+						CertificateRef: &gwapi.LocalObjectReference{
+							Group: "core",
+							Kind:  "Secret",
+							Name:  "secret-1",
+						},
+					},
+				},
+				{
+					Hostname: ptrHostname("www.example.com"),
+					Port:     gwapi.PortNumber(443),
+					Protocol: gwapi.HTTPSProtocolType,
+					TLS: &gwapi.GatewayTLSConfig{
+						Mode: ptrMode(gwapi.TLSModeTerminate),
+						CertificateRef: &gwapi.LocalObjectReference{
+							Group: "core",
+							Kind:  "Secret",
+							Name:  "secret-1",
+						},
+					},
+				}},
+			wantErr: "spec.listeners[0].tls.certificateRef.name: Invalid value: \"secret-1\": this secret name must only appear in a single listener entry but is also used in spec.listeners[1].tls.certificateRef.name",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gotErr := validateGatewayListeners(field.NewPath("spec", "listeners"), test.listeners).ToAggregate()
+			if test.wantErr == "" {
+				assert.NoError(t, gotErr)
+			} else {
+				assert.EqualError(t, gotErr, test.wantErr)
+			}
+		})
+	}
 }
