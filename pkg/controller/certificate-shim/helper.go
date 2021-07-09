@@ -33,7 +33,7 @@ var (
 	errInvalidIngressAnnotation = errors.New("invalid ingress annotation")
 )
 
-// translateAnnotations sets the Certificate spec using the ingress-like
+// translateAnnotations updates the Certificate spec using the ingress-like
 // annotations. For example, the following Ingress:
 //
 //   kind: Ingress
