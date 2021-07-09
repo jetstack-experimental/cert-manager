@@ -83,7 +83,16 @@ func SyncFnFor(
 			return fmt.Errorf("programmer mistake: %T was expected to be a runtime.Object", ingLike)
 		}
 
-		if !hasShimAnnotation(ingLike, defaults.DefaultAutoCertificateAnnotations) {
+		// The defaults.DefaultAutoCertificateAnnotations is only used for the
+		// Ingress resource, and is disabled for other ingress-like types. It is
+		// used for the "kubernetes.io/tls-acme" annotation.
+		var autoAnnotations []string
+		switch ingLike.(type) {
+		case *networkingv1beta1.Ingress:
+			autoAnnotations = defaults.DefaultAutoCertificateAnnotations
+		}
+
+		if !hasShimAnnotation(ingLike, autoAnnotations) {
 			logf.V(logf.DebugLevel).Infof("not syncing ingress resource as it does not contain a %q or %q annotation",
 				cmapi.IngressIssuerNameAnnotationKey, cmapi.IngressClusterIssuerNameAnnotationKey)
 			return nil
