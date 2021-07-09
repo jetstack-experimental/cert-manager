@@ -60,22 +60,6 @@ func Test_hasShimAnnotation(t *testing.T) {
 			if shouldSyncIngress != test.Want {
 				t.Errorf("Expected shouldSyncIngress=%v for annotations %#v", test.Want, test.Annot)
 			}
-		}
-	})
-
-	t.Run("gateway", func(t *testing.T) {
-		tests := []testT{
-			{Annot: map[string]string{"cert-manager.io/issuer": ""}, Want: true},
-			{Annot: map[string]string{"cert-manager.io/cluster-issuer": ""}, Want: true},
-			// The flag --auto-certificate-annotations as well as the default
-			// "kubernetes.io/tls-acme" annotation are not available for the
-			// Gateway resource.
-			{Annot: map[string]string{"kubernetes.io/tls-acme": "true"}, Want: false},
-			{Annot: map[string]string{"kubernetes.io/tls-acme": "false"}, Want: false},
-			{Annot: map[string]string{"kubernetes.io/tls-acme": ""}, Want: false},
-			{Annot: nil, Want: false},
-		}
-		for _, test := range tests {
 			shouldSyncGateway := hasShimAnnotation(buildGateway("", "", test.Annot), []string{"kubernetes.io/tls-acme"})
 			if shouldSyncGateway != test.Want {
 				t.Errorf("Expected shouldSyncGateway=%v for annotations %#v", test.Want, test.Annot)
@@ -495,7 +479,7 @@ func TestSync(t *testing.T) {
 					Name:      "ingress-name",
 					Namespace: gen.DefaultTestNamespace,
 					Annotations: map[string]string{
-						testAcmeTLSAnnotation: "true",
+						"kubernetes.io/tls-acme": "true",
 					},
 					UID: types.UID("ingress-name"),
 				},
@@ -1559,7 +1543,7 @@ func TestSync(t *testing.T) {
 			},
 		},
 		{
-			Name:                "should return a basic certificate when no provider specific config is provided",
+			Name:                "kubernetes.io/tls-acme should not trigger a Gateway",
 			Issuer:              clusterIssuer,
 			DefaultIssuerName:   "issuer-name",
 			DefaultIssuerKind:   "ClusterIssuer",
@@ -1570,7 +1554,7 @@ func TestSync(t *testing.T) {
 					Name:      "gateway-name",
 					Namespace: gen.DefaultTestNamespace,
 					Annotations: map[string]string{
-						testAcmeTLSAnnotation: "true",
+						"kubernetes.io/tls-acme": "true",
 					},
 					UID: types.UID("gateway-name"),
 				},
@@ -1589,26 +1573,6 @@ func TestSync(t *testing.T) {
 							},
 						},
 					}},
-				},
-			},
-			ExpectedEvents: []string{`Normal CreateCertificate Successfully created Certificate "example-com-tls"`},
-			ExpectedCreate: []*cmapi.Certificate{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:            "example-com-tls",
-						Namespace:       gen.DefaultTestNamespace,
-						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
-					},
-					Spec: cmapi.CertificateSpec{
-						DNSNames:   []string{"example.com"},
-						SecretName: "example-com-tls",
-						IssuerRef: cmmeta.ObjectReference{
-							Name:  "issuer-name",
-							Kind:  "ClusterIssuer",
-							Group: "cert-manager.io",
-						},
-						Usages: cmapi.DefaultKeyUsages(),
-					},
 				},
 			},
 		},
@@ -2163,12 +2127,9 @@ func TestSync(t *testing.T) {
 			},
 		},
 		{
-			Name:         "if a Gateway contains multiple tls entries that specify the same secretName, an error should be logged and no action taken",
+			Name:         "if a Gateway contains multiple listeners that specify the same secretName, it should create a single Certificate",
 			Issuer:       acmeIssuer,
 			IssuerLister: []runtime.Object{acmeIssuer},
-			ExpectedEvents: []string{
-				`Warning BadConfig spec.listeners[0].tls.certificateRef.name: Invalid value: "example-com-tls": this secret name must only appear in a single listener entry but is also used in spec.listeners[1].tls.certificateRef.name`,
-			},
 			IngressLike: &gwapi.Gateway{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "gateway-name",
@@ -2195,7 +2156,19 @@ func TestSync(t *testing.T) {
 							},
 						},
 					}, {
-						Hostname: ptrHostname("notexample.com"),
+						Hostname: ptrHostname("www.example.com"),
+						Port:     443,
+						Protocol: "HTTPS",
+						TLS: &gwapi.GatewayTLSConfig{
+							Mode: ptrMode(gwapi.TLSModeTerminate),
+							CertificateRef: &gwapi.LocalObjectReference{
+								Group: "core",
+								Kind:  "Secret",
+								Name:  "example-com-tls",
+							},
+						},
+					}, {
+						Hostname: ptrHostname("foo.example.com"),
 						Port:     443,
 						Protocol: "HTTPS",
 						TLS: &gwapi.GatewayTLSConfig{
@@ -2207,6 +2180,28 @@ func TestSync(t *testing.T) {
 							},
 						},
 					}},
+				},
+			},
+			ExpectedEvents: []string{
+				`Normal CreateCertificate Successfully created Certificate "example-com-tls"`,
+			},
+			ExpectedCreate: []*cmapi.Certificate{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            "example-com-tls",
+						Namespace:       gen.DefaultTestNamespace,
+						OwnerReferences: buildGatewayOwnerReferences("gateway-name", gen.DefaultTestNamespace),
+					},
+					Spec: cmapi.CertificateSpec{
+						DNSNames:   []string{"example.com", "www.example.com", "foo.example.com"},
+						SecretName: "example-com-tls",
+						IssuerRef: cmmeta.ObjectReference{
+							Name:  "issuer-name",
+							Kind:  "Issuer",
+							Group: "cert-manager.io",
+						},
+						Usages: cmapi.DefaultKeyUsages(),
+					},
 				},
 			},
 		},
@@ -2354,7 +2349,7 @@ func TestSync(t *testing.T) {
 				DefaultIssuerName:                 test.DefaultIssuerName,
 				DefaultIssuerKind:                 test.DefaultIssuerKind,
 				DefaultIssuerGroup:                test.DefaultIssuerGroup,
-				DefaultAutoCertificateAnnotations: []string{testAcmeTLSAnnotation},
+				DefaultAutoCertificateAnnotations: []string{"kubernetes.io/tls-acme"},
 			})
 			b.Start()
 
@@ -2432,7 +2427,7 @@ func TestIssuerForIngress(t *testing.T) {
 		},
 		{
 			Ingress: buildIngress("name", "namespace", map[string]string{
-				testAcmeTLSAnnotation: "true",
+				"kubernetes.io/tls-acme": "true",
 			}),
 			DefaultName:   "default-name",
 			DefaultKind:   "ClusterIssuer",
@@ -2447,7 +2442,7 @@ func TestIssuerForIngress(t *testing.T) {
 		},
 		{
 			Ingress: buildIngress("name", "namespace", map[string]string{
-				testAcmeTLSAnnotation: "true",
+				"kubernetes.io/tls-acme": "true",
 			}),
 			ExpectedError: errors.New("failed to determine issuer name to be used for ingress resource"),
 		},
@@ -2631,103 +2626,6 @@ func Test_validateGatewayListenerBlock(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			gotErr := validateGatewayListenerBlock(field.NewPath("spec", "listeners").Index(0), test.listener).ToAggregate()
-			if test.wantErr == "" {
-				assert.NoError(t, gotErr)
-			} else {
-				assert.EqualError(t, gotErr, test.wantErr)
-			}
-		})
-	}
-}
-
-func Test_validateGatewayListeners(t *testing.T) {
-	tests := []struct {
-		name      string
-		listeners []gwapi.Listener
-		wantErr   string
-	}{
-		{
-			name: "happy path",
-			listeners: []gwapi.Listener{
-				{
-					Hostname: ptrHostname("example.com"),
-					Port:     gwapi.PortNumber(443),
-					Protocol: gwapi.HTTPSProtocolType,
-					TLS: &gwapi.GatewayTLSConfig{
-						Mode: ptrMode(gwapi.TLSModeTerminate),
-						CertificateRef: &gwapi.LocalObjectReference{
-							Group: "core",
-							Kind:  "Secret",
-							Name:  "example-com-tls",
-						},
-					},
-				},
-				{
-					Hostname: ptrHostname("example.com"),
-					Port:     gwapi.PortNumber(8443),
-					Protocol: gwapi.HTTPSProtocolType,
-					TLS: &gwapi.GatewayTLSConfig{
-						Mode: ptrMode(gwapi.TLSModeTerminate),
-						CertificateRef: &gwapi.LocalObjectReference{
-							Group: "core",
-							Kind:  "Secret",
-							Name:  "example-com-8443-tls",
-						},
-					},
-				},
-				{
-					Hostname: ptrHostname("foo.example.com"),
-					Port:     gwapi.PortNumber(443),
-					Protocol: gwapi.HTTPSProtocolType,
-					TLS: &gwapi.GatewayTLSConfig{
-						Mode: ptrMode(gwapi.TLSModeTerminate),
-						CertificateRef: &gwapi.LocalObjectReference{
-							Group: "core",
-							Kind:  "Secret",
-							Name:  "foo-example-com-tls",
-						},
-					},
-				}},
-		},
-		{
-			name:      "no error when no listener is given",
-			listeners: []gwapi.Listener{},
-		},
-		{
-			name: "duplicate secretName",
-			listeners: []gwapi.Listener{
-				{
-					Hostname: ptrHostname("example.com"),
-					Port:     gwapi.PortNumber(443),
-					Protocol: gwapi.HTTPSProtocolType,
-					TLS: &gwapi.GatewayTLSConfig{
-						Mode: ptrMode(gwapi.TLSModeTerminate),
-						CertificateRef: &gwapi.LocalObjectReference{
-							Group: "core",
-							Kind:  "Secret",
-							Name:  "secret-1",
-						},
-					},
-				},
-				{
-					Hostname: ptrHostname("www.example.com"),
-					Port:     gwapi.PortNumber(443),
-					Protocol: gwapi.HTTPSProtocolType,
-					TLS: &gwapi.GatewayTLSConfig{
-						Mode: ptrMode(gwapi.TLSModeTerminate),
-						CertificateRef: &gwapi.LocalObjectReference{
-							Group: "core",
-							Kind:  "Secret",
-							Name:  "secret-1",
-						},
-					},
-				}},
-			wantErr: "spec.listeners[0].tls.certificateRef.name: Invalid value: \"secret-1\": this secret name must only appear in a single listener entry but is also used in spec.listeners[1].tls.certificateRef.name",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			gotErr := validateGatewayListeners(field.NewPath("spec", "listeners"), test.listeners).ToAggregate()
 			if test.wantErr == "" {
 				assert.NoError(t, gotErr)
 			} else {

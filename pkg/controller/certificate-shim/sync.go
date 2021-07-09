@@ -83,9 +83,9 @@ func SyncFnFor(
 			return fmt.Errorf("programmer mistake: %T was expected to be a runtime.Object", ingLike)
 		}
 
-		// The defaults.DefaultAutoCertificateAnnotations is only used for the
-		// Ingress resource, and is disabled for other ingress-like types. It is
-		// used for the "kubernetes.io/tls-acme" annotation.
+		// The flag --auto-certificate-annotations as well as the default
+		// "kubernetes.io/tls-acme" annotation are only enabled for the Ingress
+		// resource.
 		var autoAnnotations []string
 		switch ingLike.(type) {
 		case *networkingv1beta1.Ingress:
@@ -153,15 +153,15 @@ func SyncFnFor(
 func validateIngressLike(ingLike metav1.Object) field.ErrorList {
 	switch o := ingLike.(type) {
 	case *networkingv1beta1.Ingress:
-		return validateIngressTLS(field.NewPath("spec", "tls"), o.Spec.TLS)
+		return checkForDuplicateSecretNames(field.NewPath("spec", "tls"), o.Spec.TLS)
 	case *gwapi.Gateway:
-		return validateGatewayListeners(field.NewPath("spec", "listeners"), o.Spec.Listeners)
+		return nil
 	default:
 		panic(fmt.Errorf("programmer mistake: validateIngressLike can't handle %T, expected Ingress or Gateway", ingLike))
 	}
 }
 
-func validateIngressTLS(path *field.Path, tlsBlocks []networkingv1beta1.IngressTLS) field.ErrorList {
+func checkForDuplicateSecretNames(path *field.Path, tlsBlocks []networkingv1beta1.IngressTLS) field.ErrorList {
 	var errs field.ErrorList
 	// We can't let two TLS blocks share the same secretName because we decided
 	// to create one Certificate for each TLS block. For example:
@@ -178,11 +178,8 @@ func validateIngressTLS(path *field.Path, tlsBlocks []networkingv1beta1.IngressT
 	// same name, which would fail.
 	//
 	// We keep track of the order of the secret names due to Go iterating on
-	// maps in a non-deterministic way. We also keep track of each secret name's
-	// path. These paths look like this:
-	//   "spec.tls[2].secretName"
-	//   "spec.tls[6].secretName"
-	// These paths allow us to give better error messages.
+	// maps in a non-deterministic way. We also keep track of each secretName's
+	// JSON path just so that we can give a nice error message.
 	var secretNames []string
 	secretPaths := make(map[string][]*field.Path)
 	for i, tls := range tlsBlocks {
@@ -213,67 +210,6 @@ func validateIngressTLSBlock(path *field.Path, tlsBlock networkingv1beta1.Ingres
 	}
 	if tlsBlock.SecretName == "" {
 		errs = append(errs, field.Required(path.Child("secretName"), ""))
-	}
-
-	return errs
-}
-
-func validateGatewayListeners(path *field.Path, listeners []gwapi.Listener) field.ErrorList {
-	var errs field.ErrorList
-
-	// We can't let two TLS blocks share the same certificateRef.name because we
-	// decided to create one Certificate for each Gateway listener. For example:
-	//
-	//   kind: Gateway
-	//   spec:
-	//     listeners:
-	//       - hostname: example.com
-	//         tls:
-	//           certificateRef:
-	//             name: secret-1
-	//       - hostname: www.example.com
-	//         tls:
-	//           certificateRef:
-	//             name: secret-1
-	//
-	// With this Gateway, cert-manager would create two Certificates with the
-	// same name, which would fail.
-	//
-	// We keep track of the order of the secret names due to Go iterating on
-	// maps in a non-deterministic way. We also keep track of each secret name's
-	// path. These paths look like this:
-	//   "spec.listeners[2].tls.certificateRef.name"
-	//   "spec.listeners[6].tls.certificateRef.name"
-	// These paths allow us to give better error messages.
-	var secretNames []string
-	secretPaths := make(map[string][]*field.Path)
-	for i, l := range listeners {
-		if l.TLS == nil || l.TLS.CertificateRef == nil {
-			// This function is meant to catch the "blocking" validation errors:
-			// if any of these validations fail, the certificate-shim controller
-			// won't be creating a Certificate.
-			//
-			// But we still want to create Certificates for the valid listeners
-			// even though one of the listerners block is invalid. That's why
-			// the listener validation happens in validateGatewayListenerBlock
-			// instead.
-			continue
-		}
-
-		if _, already := secretPaths[l.TLS.CertificateRef.Name]; !already {
-			secretNames = append(secretNames, l.TLS.CertificateRef.Name)
-		}
-		secretPaths[l.TLS.CertificateRef.Name] = append(secretPaths[l.TLS.CertificateRef.Name],
-			path.Index(i).Child("tls").Child("certificateRef").Child("name"))
-	}
-	for _, name := range secretNames {
-		paths := secretPaths[name]
-		if len(paths) > 1 {
-			// We could use field.Duplicate, but that would prevent us from
-			// giving details as to what this duplicate is about.
-			errs = append(errs, field.Invalid(paths[0], name,
-				fmt.Sprintf("this secret name must only appear in a single listener entry but is also used in %s", paths[1])))
-		}
 	}
 
 	return errs
