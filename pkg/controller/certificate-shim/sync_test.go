@@ -40,48 +40,48 @@ import (
 	gwapi "sigs.k8s.io/gateway-api/apis/v1alpha1"
 )
 
-const testAcmeTLSAnnotation = "kubernetes.io/tls-acme"
-
 func Test_hasShimAnnotation(t *testing.T) {
 	type testT struct {
-		Annotations map[string]string
-		ShouldSync  bool
+		Annot map[string]string
+		Want  bool
 	}
-	tests := []testT{
-		{
-			Annotations: map[string]string{cmapi.IngressIssuerNameAnnotationKey: ""},
-			ShouldSync:  true,
-		},
-		{
-			Annotations: map[string]string{cmapi.IngressClusterIssuerNameAnnotationKey: ""},
-			ShouldSync:  true,
-		},
-		{
-			Annotations: map[string]string{testAcmeTLSAnnotation: "true"},
-			ShouldSync:  true,
-		},
-		{
-			Annotations: map[string]string{testAcmeTLSAnnotation: "false"},
-			ShouldSync:  false,
-		},
-		{
-			Annotations: map[string]string{testAcmeTLSAnnotation: ""},
-			ShouldSync:  false,
-		},
-		{
-			ShouldSync: false,
-		},
-	}
-	for _, test := range tests {
-		shouldSyncIngress := hasShimAnnotation(buildIngress("", "", test.Annotations), []string{"kubernetes.io/tls-acme"})
-		shouldSyncGateway := hasShimAnnotation(buildGateway("", "", test.Annotations), []string{"kubernetes.io/tls-acme"})
-		if shouldSyncIngress != test.ShouldSync {
-			t.Errorf("Expected shouldSyncIngress=%v for annotations %#v", test.ShouldSync, test.Annotations)
+
+	t.Run("ingress", func(t *testing.T) {
+		tests := []testT{
+			{Annot: map[string]string{"cert-manager.io/issuer": ""}, Want: true},
+			{Annot: map[string]string{"cert-manager.io/cluster-issuer": ""}, Want: true},
+			{Annot: map[string]string{"kubernetes.io/tls-acme": "true"}, Want: true},
+			{Annot: map[string]string{"kubernetes.io/tls-acme": "false"}, Want: false},
+			{Annot: map[string]string{"kubernetes.io/tls-acme": ""}, Want: false},
+			{Annot: nil, Want: false},
 		}
-		if shouldSyncGateway != test.ShouldSync {
-			t.Errorf("Expected shouldSyncGateway=%v for annotations %#v", test.ShouldSync, test.Annotations)
+		for _, test := range tests {
+			shouldSyncIngress := hasShimAnnotation(buildIngress("", "", test.Annot), []string{"kubernetes.io/tls-acme"})
+			if shouldSyncIngress != test.Want {
+				t.Errorf("Expected shouldSyncIngress=%v for annotations %#v", test.Want, test.Annot)
+			}
 		}
-	}
+	})
+
+	t.Run("gateway", func(t *testing.T) {
+		tests := []testT{
+			{Annot: map[string]string{"cert-manager.io/issuer": ""}, Want: true},
+			{Annot: map[string]string{"cert-manager.io/cluster-issuer": ""}, Want: true},
+			// The flag --auto-certificate-annotations as well as the default
+			// "kubernetes.io/tls-acme" annotation are not available for the
+			// Gateway resource.
+			{Annot: map[string]string{"kubernetes.io/tls-acme": "true"}, Want: false},
+			{Annot: map[string]string{"kubernetes.io/tls-acme": "false"}, Want: false},
+			{Annot: map[string]string{"kubernetes.io/tls-acme": ""}, Want: false},
+			{Annot: nil, Want: false},
+		}
+		for _, test := range tests {
+			shouldSyncGateway := hasShimAnnotation(buildGateway("", "", test.Annot), []string{"kubernetes.io/tls-acme"})
+			if shouldSyncGateway != test.Want {
+				t.Errorf("Expected shouldSyncGateway=%v for annotations %#v", test.Want, test.Annot)
+			}
+		}
+	})
 }
 
 func TestSync(t *testing.T) {
