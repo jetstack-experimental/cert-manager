@@ -24,7 +24,7 @@ set -o pipefail
 # If you are running the *full* test suite, you should be sure to run this
 # script beforehand.
 
-SCRIPT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" > /dev/null && pwd )"
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 export REPO_ROOT="${SCRIPT_ROOT}/.."
 source "${SCRIPT_ROOT}/lib/lib.sh"
 
@@ -33,6 +33,10 @@ setup_tools
 
 echo "Installing kyverno into cluster..."
 "${SCRIPT_ROOT}/addon/kyverno/install.sh"
+
+# cert-manager needs the gateway-api to be installed to start.
+echo "Installing gateway-api into the cluster..."
+"${SCRIPT_ROOT}/addon/gatewayapi/install.sh"
 
 echo "Installing cert-manager into the cluster..."
 "${SCRIPT_ROOT}/addon/certmanager/install.sh"
@@ -57,3 +61,6 @@ echo "Loading vault into the cluster..."
 
 echo "Installing sample-external-issuer into the cluster..."
 "${SCRIPT_ROOT}/addon/sample-external-issuer/install.sh"
+
+echo "Installing istio into the cluster..."
+"${SCRIPT_ROOT}/addon/istio/install.sh"

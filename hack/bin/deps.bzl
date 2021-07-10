@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_file")
 load("@bazel_gazelle//:deps.bzl", "go_repository")
 
 def install():
@@ -24,6 +24,8 @@ def install():
     install_kubectl()
     install_oc3()
     install_kind()
+    install_kustomize()
+    install_istioctl()
 
     # Install golang.org/x/build as kubernetes/repo-infra requires it for the
     # build-tar bazel target.
@@ -107,7 +109,7 @@ filegroup(
 )
 """,
     )
-    
+
     http_archive(
         name = "kubebuilder-tools_darwin_amd64",
         sha256 = "add3f62be843b0c0f4be17d9159ebea738da18e2f0edce62d945b3ffdd683800",
@@ -200,7 +202,6 @@ def install_kubectl():
         urls = ["https://storage.googleapis.com/kubernetes-release/release/v1.21.2/bin/linux/amd64/kubectl"],
     )
 
-
 # Define rules for different oc versions
 def install_oc3():
     http_archive(
@@ -208,7 +209,7 @@ def install_oc3():
         sha256 = "4b0f07428ba854174c58d2e38287e5402964c9a9355f6c359d1242efd0990da3",
         urls = ["https://github.com/openshift/origin/releases/download/v3.11.0/openshift-origin-client-tools-v3.11.0-0cbc58b-linux-64bit.tar.gz"],
         build_file_content =
-         """
+            """
 filegroup(
      name = "file",
      srcs = [
@@ -218,6 +219,7 @@ filegroup(
 )
     """,
     )
+
 ## Fetch kind images used during e2e tests
 def install_kind():
     # install kind binary
@@ -235,3 +237,65 @@ def install_kind():
         urls = ["https://github.com/kubernetes-sigs/kind/releases/download/v0.11.1/kind-linux-amd64"],
     )
 
+def install_kustomize():
+    http_archive(
+        name = "kustomize_darwin",
+        sha256 = "808d86fc15cec9226dd8b6440f39cfa8e8e31452efc70fb2f35c59529ddebfbf",
+        urls = ["https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v4.2.0/kustomize_v4.2.0_darwin_amd64.tar.gz"],
+        build_file_content = """
+filegroup(
+    name = "file",
+    srcs = [
+        "kustomize",
+    ],
+    visibility = ["//visibility:public"],
+)
+""",
+    )
+    http_archive(
+        name = "kustomize_linux",
+        sha256 = "220dd03dcda8e45dc50e4e42b2d71882cbc4c05e0ed863513e67930ecad939eb",
+        urls = ["https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv4.2.0/kustomize_v4.2.0_linux_amd64.tar.gz"],
+        build_file_content = """
+filegroup(
+    name = "file",
+    srcs = [
+        "kustomize",
+    ],
+    visibility = ["//visibility:public"],
+)
+""",
+    )
+
+def install_istioctl():
+    http_archive(
+        name = "istioctl_darwin",
+        sha256 = "3ac12c28f39c49f8e812453cafd5741a39353bb80f92f8b335957d5f9415e04e",
+        urls = ["https://github.com/istio/istio/releases/download/1.10.2/istio-1.10.2-osx.tar.gz"],
+        build_file_content =
+            """
+filegroup(
+    name = "file",
+    srcs = [
+        "istio-1.10.2/bin/istioctl",
+    ],
+    visibility = ["//visibility:public"],
+)
+    """,
+    )
+
+    http_archive(
+        name = "istioctl_linux",
+        sha256 = "23eaa80a0c3edc8271fe82443b33958437c6c5a62f28bc1b7d04a71e416010a4",
+        urls = ["https://github.com/istio/istio/releases/download/1.10.2/istio-1.10.2-linux-amd64.tar.gz"],
+        build_file_content =
+            """
+filegroup(
+    name = "file",
+    srcs = [
+        "istio-1.10.2/bin/istioctl",
+    ],
+    visibility = ["//visibility:public"],
+)
+    """,
+    )

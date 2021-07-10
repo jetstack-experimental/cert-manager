@@ -18,7 +18,7 @@ set -o nounset
 set -o errexit
 set -o pipefail
 
-LIB_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" > /dev/null && pwd )"
+LIB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 export REPO_ROOT="$LIB_ROOT/../.."
 
 export SKIP_BUILD_ADDON_IMAGES="${SKIP_BUILD_ADDON_IMAGES:-}"
@@ -39,8 +39,8 @@ export INGRESS_IP="${SERVICE_IP_PREFIX}.15"
 # versions of the tools required for development
 setup_tools() {
   check_bazel
-  bazel build //hack/bin:helm //hack/bin:kind //hack/bin:kubectl //devel/bin:ginkgo
-  if [[ "$IS_OPENSHIFT" == "true" ]] ; then
+  bazel build //hack/bin:helm //hack/bin:kind //hack/bin:kubectl //devel/bin:ginkgo //hack/bin:istioctl //hack/bin:kustomize
+  if [[ "$IS_OPENSHIFT" == "true" ]]; then
     bazel build //hack/bin:oc3
   fi
   local bindir="$(bazel info bazel-genfiles)"
@@ -49,6 +49,7 @@ setup_tools() {
   export OC3="${bindir}/hack/bin/oc3"
   export KUBECTL="${bindir}/hack/bin/kubectl"
   export KUSTOMIZE="${bindir}/hack/bin/kustomize"
+  export ISTIOCTL="${bindir}/hack/bin/istioctl"
   export GINKGO="${bindir}/devel/bin/ginkgo"
   # Configure PATH to use bazel provided e2e tools
   export PATH="${SCRIPT_ROOT}/bin:$PATH"
@@ -102,7 +103,7 @@ require_image() {
 # with name $KIND_CLUSTER_NAME
 load_image() {
   IMAGE_NAME="$1"
-  if [[ "$IS_OPENSHIFT" == "true" ]] ; then
+  if [[ "$IS_OPENSHIFT" == "true" ]]; then
     # No loading into a cluster for OpenShift is needed
     # as OpenShift shares the Docker daemon the image was
     # built with
