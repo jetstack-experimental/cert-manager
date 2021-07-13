@@ -171,6 +171,18 @@ prometheus:
     interval: 60s
     scrapeTimeout: 30s
     labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+    rules:
+    - alert: CertManagerAbsent
+      expr: absent(up{job="cert-manager"})
+      for: 10m
+      labels:
+        severity: critical
+      annotations:
+        description: New certificates will not be able to be issued, and existing ones can't be renewed until cert-manager is back online.
+        summary: cert-manager has dissapeared from Prometheus service discovery.
 
 # Use these variables to configure the HTTP_PROXY environment variables
 # http_proxy: "http://proxy:8080"
