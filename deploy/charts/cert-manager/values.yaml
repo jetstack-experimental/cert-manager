@@ -167,6 +167,7 @@ prometheus:
     enabled: false
     prometheusInstance: default
     targetPort: 9402
+    portName: tcp-monitor
     path: /metrics
     interval: 60s
     scrapeTimeout: 30s
