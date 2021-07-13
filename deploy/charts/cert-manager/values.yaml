@@ -39,6 +39,19 @@ global:
     # renewal of a leadership.
     # retryPeriod: 15s
 
+# Each resource is part of one of these 4 components: "crd", "certmanager",
+# "webhook" and "cainjector". Each template filenames is prefixed with the name
+# of the component. This option can be used to only include a subset of the
+# components.
+components:
+- certmanager
+- webhook
+- cainjector
+# - crd
+
+# DEPRECATED: use components instead!
+# Setting this value to true is the same as adding "crd" to the components list.
+# CRDs will be rendered if "crd" is added to components OR installCRDs is set to true.
 installCRDs: false
 
 replicaCount: 1
