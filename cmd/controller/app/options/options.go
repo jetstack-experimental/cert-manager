@@ -41,9 +41,11 @@ import (
 	"github.com/jetstack/cert-manager/pkg/controller/certificates/requestmanager"
 	"github.com/jetstack/cert-manager/pkg/controller/certificates/revisionmanager"
 	"github.com/jetstack/cert-manager/pkg/controller/certificates/trigger"
+	csracmecontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/acme"
 	csrcacontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/ca"
 	csrselfsignedcontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/selfsigned"
 	csrvaultcontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/vault"
+	csrvenaficontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/venafi"
 	clusterissuerscontroller "github.com/jetstack/cert-manager/pkg/controller/clusterissuers"
 	ingressshimcontroller "github.com/jetstack/cert-manager/pkg/controller/ingress-shim"
 	issuerscontroller "github.com/jetstack/cert-manager/pkg/controller/issuers"
@@ -191,8 +193,10 @@ var (
 	}
 
 	experimentalCertificateSigningRequestControllers = []string{
+		csracmecontroller.CSRControllerName,
 		csrcacontroller.CSRControllerName,
 		csrselfsignedcontroller.CSRControllerName,
+		csrvenaficontroller.CSRControllerName,
 		csrvaultcontroller.CSRControllerName,
 	}
 )

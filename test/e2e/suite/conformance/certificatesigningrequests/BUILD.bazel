@@ -37,9 +37,11 @@ filegroup(
     name = "all-srcs",
     srcs = [
         ":package-srcs",
+        "//test/e2e/suite/conformance/certificatesigningrequests/acme:all-srcs",
         "//test/e2e/suite/conformance/certificatesigningrequests/ca:all-srcs",
         "//test/e2e/suite/conformance/certificatesigningrequests/selfsigned:all-srcs",
         "//test/e2e/suite/conformance/certificatesigningrequests/vault:all-srcs",
+        "//test/e2e/suite/conformance/certificatesigningrequests/venafi:all-srcs",
     ],
     tags = ["automanaged"],
     visibility = ["//visibility:public"],
