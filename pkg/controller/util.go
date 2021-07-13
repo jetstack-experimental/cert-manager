@@ -113,9 +113,6 @@ func (q *QueuingEventHandler) OnAdd(obj interface{}) {
 
 // OnUpdate adds an updated object to the workqueue.
 func (q *QueuingEventHandler) OnUpdate(old, new interface{}) {
-	if reflect.DeepEqual(old, new) {
-		return
-	}
 	q.Enqueue(new)
 }
 
