@@ -10,6 +10,11 @@ metadata:
     app.kubernetes.io/component: "webhook"
     {{- include "labels" . | nindent 4 }}
 spec:
+  # Allow the K8S API server to reach the webhook server even before its
+  # readiness probes are passing.
+  # This allows the /startupz code in the webhook server to verify that the K8S
+  # API server can connect to it, by performing a dry-run create Certificate.
+  publishNotReadyAddresses: true
   type: {{ .Values.webhook.serviceType }}
   {{- if .Values.webhook.loadBalancerIP }}
   loadBalancerIP: {{ .Values.webhook.loadBalancerIP }}

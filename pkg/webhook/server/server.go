@@ -41,6 +41,7 @@ import (
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	logf "github.com/jetstack/cert-manager/pkg/logs"
+	"github.com/jetstack/cert-manager/pkg/util/cmapichecker"
 	"github.com/jetstack/cert-manager/pkg/util/profiling"
 	"github.com/jetstack/cert-manager/pkg/webhook/handlers"
 	servertls "github.com/jetstack/cert-manager/pkg/webhook/server/tls"
@@ -115,6 +116,9 @@ type Server struct {
 	// Values are from tls package constants (https://golang.org/pkg/crypto/tls/#pkg-constants).
 	MinTLSVersion string
 
+	// APIChecker is used to check that the cert-manager CRDs have been installed on the K8S API server and that the cert-manager webhooks
+	APIChecker cmapichecker.Interface
+
 	listener net.Listener
 }
 
@@ -147,6 +151,7 @@ func (s *Server) Run(stopCh <-chan struct{}) error {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/healthz", s.handleHealthz)
 		mux.HandleFunc("/livez", s.handleLivez)
+		mux.HandleFunc("/startupz", s.handleStartupz)
 		s.Log.V(logf.InfoLevel).Info("listening for insecure healthz connections", "address", s.HealthzAddr)
 		healthzChan = s.startServer(l, internalStopCh, mux)
 	}
@@ -410,6 +415,18 @@ func (s *Server) handleHealthz(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleStartupz(w http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+	log := s.Log.WithName("startupz")
+	if err := s.APIChecker.Check(req.Context()); err != nil {
+		log.V(logf.DebugLevel).Info("Failure", "reason", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	log.V(logf.DebugLevel).Info("Success")
 	w.WriteHeader(http.StatusOK)
 }
 

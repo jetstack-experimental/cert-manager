@@ -18,6 +18,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-logr/logr"
@@ -28,12 +29,15 @@ import (
 	"github.com/jetstack/cert-manager/cmd/webhook/app/options"
 	logf "github.com/jetstack/cert-manager/pkg/logs"
 	"github.com/jetstack/cert-manager/pkg/util"
+	"github.com/jetstack/cert-manager/pkg/util/cmapichecker"
 	"github.com/jetstack/cert-manager/pkg/webhook"
 	"github.com/jetstack/cert-manager/pkg/webhook/authority"
 	"github.com/jetstack/cert-manager/pkg/webhook/handlers"
 	"github.com/jetstack/cert-manager/pkg/webhook/server"
 	"github.com/jetstack/cert-manager/pkg/webhook/server/tls"
 )
+
+const defaultAPICheckerNamespace = "default"
 
 var validationHook handlers.ValidatingAdmissionHook = handlers.NewRegistryBackedValidator(logf.Log, webhook.Scheme, webhook.ValidationRegistry)
 var mutationHook handlers.MutatingAdmissionHook = handlers.NewRegistryBackedMutator(logf.Log, webhook.Scheme, webhook.MutationRegistry)
@@ -80,6 +84,22 @@ func NewServerWithOptions(log logr.Logger, opts options.WebhookOptions) (*server
 	default:
 		log.V(logf.WarnLevel).Info("serving insecurely as tls certificate data not provided")
 	}
+	apiCheckerNamespace, err := util.GetInClusterNamespace()
+	if err != nil {
+		if !errors.Is(err, util.ErrNotInCluster) {
+			return nil, err
+		}
+		log.V(logf.WarnLevel).Info(
+			"Overriding namespace for API health checks",
+			"namespace", defaultAPICheckerNamespace,
+			"reason", err)
+		apiCheckerNamespace = defaultAPICheckerNamespace
+	}
+
+	apiChecker, err := cmapichecker.New(restcfg, apiCheckerNamespace)
+	if err != nil {
+		return nil, err
+	}
 
 	return &server.Server{
 		ListenAddr:        fmt.Sprintf(":%d", opts.ListenPort),
@@ -92,6 +112,7 @@ func NewServerWithOptions(log logr.Logger, opts options.WebhookOptions) (*server
 		MutationWebhook:   mutationHook,
 		ConversionWebhook: conversionHook,
 		Log:               log,
+		APIChecker:        apiChecker,
 	}, nil
 }
 
