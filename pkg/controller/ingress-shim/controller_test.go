@@ -78,7 +78,7 @@ func Test_controller_Register(t *testing.T) {
 			expectRequeueKey: "namespace-1/ingress-1",
 		},
 		{
-			name: "ingress should not be queued when its child certificate is added",
+			name: "ingress should be queued when its child certificate is added",
 			givenCall: func(t *testing.T, c cmclient.Interface, _ kclient.Interface) {
 				_, err := c.CertmanagerV1().Certificates("namespace-1").Create(context.Background(), &cmapi.Certificate{ObjectMeta: metav1.ObjectMeta{
 					Namespace: "namespace-1", Name: "cert-1",
@@ -91,7 +91,7 @@ func Test_controller_Register(t *testing.T) {
 			expectRequeueKey: "",
 		},
 		{
-			name: "ingress should not be queued when its child certificate is updated",
+			name: "ingress should be queued when its child certificate is updated",
 			existingCMObjects: []runtime.Object{&cmapi.Certificate{ObjectMeta: metav1.ObjectMeta{
 				Namespace: "namespace-1", Name: "cert-1",
 				OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&networkingv1beta1.Ingress{ObjectMeta: metav1.ObjectMeta{
@@ -107,7 +107,7 @@ func Test_controller_Register(t *testing.T) {
 				}}, metav1.UpdateOptions{})
 				require.NoError(t, err)
 			},
-			expectRequeueKey: "",
+			expectRequeueKey: "namespace-1/ingress-2",
 		},
 		{
 			name: "ingress should be queued when its child certificate is deleted",
@@ -148,11 +148,12 @@ func Test_controller_Register(t *testing.T) {
 			// done. To work around that, we do a second queue.Get and expect it
 			// to be nil.
 			time.AfterFunc(50*time.Millisecond, queue.ShutDown)
-			gotKey, _ := queue.Get()
-			shouldBeNil, done := queue.Get()
+
+			// We only expect 0 or 1 queuing.
+			gotKey, done := queue.Get()
 			assert.True(t, done)
-			assert.Nil(t, shouldBeNil)
 			assert.Equal(t, 0, queue.Len())
+
 			if test.expectRequeueKey != "" {
 				assert.Equal(t, test.expectRequeueKey, gotKey)
 			} else {
